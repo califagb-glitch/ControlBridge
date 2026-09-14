@@ -1,0 +1,35 @@
+name: Build ControlBridge APKs
+
+on:
+  push:
+    branches: ["main", "master"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Baixar código
+        uses: actions/checkout@v4
+
+      - name: Configurar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Dar permissão ao Gradle
+        run: chmod +x gradlew
+
+      - name: Compilar Mobile e TV
+        run: ./gradlew :mobile:assembleDebug :tv:assembleDebug
+
+      - name: Salvar APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: ControlBridge-APKs
+          path: |
+            mobile/build/outputs/apk/debug/*.apk
+            tv/build/outputs/apk/debug/*.apk
