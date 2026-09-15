@@ -70,8 +70,10 @@ class MainActivity : Activity() {
 
         ip = EditText(this).apply {
             hint = "IP da TV  •  ex.: 192.168.1.20"
-            text = getSharedPreferences(ControllerAccessibilityService.PREFS, MODE_PRIVATE)
-                .getString(ControllerAccessibilityService.KEY_TV_IP, "")
+            setText(
+                getSharedPreferences(ControllerAccessibilityService.PREFS, MODE_PRIVATE)
+                    .getString(ControllerAccessibilityService.KEY_TV_IP, "") ?: ""
+            )
             setTextColor(Color.WHITE)
             setHintTextColor(Color.GRAY)
             inputType = android.text.InputType.TYPE_CLASS_PHONE
