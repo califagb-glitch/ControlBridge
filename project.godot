@@ -14,6 +14,3 @@ window/stretch/mode="canvas_items"
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
 textures/default_filters/use_nearest_mipmap_filter=false
-
-[input]
-mine={"deadzone": 0.5, "events": [Object(InputEventMouseButton,"button_index":1), Object(InputEventScreenTouch,"index":0)]}
