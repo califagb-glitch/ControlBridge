@@ -10,6 +10,7 @@ import android.bluetooth.BluetoothHidDevice
 import android.bluetooth.BluetoothHidDeviceAppSdpSettings
 import android.bluetooth.BluetoothProfile
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.view.KeyEvent
@@ -79,7 +80,12 @@ class HidGamepadService : Service() {
         super.onCreate()
         HidGamepadServiceHolder.service = this
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification("Inicializando Bluetooth HID…"))
+        val notification = buildNotification("Inicializando Bluetooth HID…")
+        if (Build.VERSION.SDK_INT >= 29) {
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
         val adapter = BluetoothAdapter.getDefaultAdapter()
         if (Build.VERSION.SDK_INT < 28 || adapter == null) {
             notifyState("Este celular não oferece Bluetooth HID Device")
