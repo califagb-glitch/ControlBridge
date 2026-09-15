@@ -1,5 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">ControlBridge</string>
-    <string name="accessibility_description">Permite ao ControlBridge receber comandos do controle Bluetooth em segundo plano e encaminhá-los para a TV.</string>
 </resources>
