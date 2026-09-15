@@ -21,7 +21,10 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: 'platform-tools platforms;android-35 build-tools;35.0.0 cmdline-tools;latest'
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.1 cmdline-tools;latest cmake;3.10.2.4988404 ndk;28.1.13356709'
+
+      - name: Prepare build directory
+        run: mkdir -p build
 
       - name: Create Android debug keystore
         shell: bash
