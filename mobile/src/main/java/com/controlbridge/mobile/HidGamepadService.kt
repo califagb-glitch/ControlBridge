@@ -9,7 +9,6 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothHidDevice
 import android.bluetooth.BluetoothHidDeviceAppSdpSettings
 import android.bluetooth.BluetoothProfile
-import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
@@ -19,10 +18,7 @@ import androidx.core.app.NotificationCompat
 import java.util.concurrent.Executors
 import kotlin.math.roundToInt
 
-/**
- * Turns the phone into a real Bluetooth Classic HID gamepad.
- * The TV sees this app as a controller, so no TV-side APK is required.
- */
+/** Real Bluetooth Classic HID gamepad: the TV sees the phone as a controller. */
 class HidGamepadService : Service() {
     private var hid: BluetoothHidDevice? = null
     private var registered = false
@@ -35,6 +31,10 @@ class HidGamepadService : Service() {
     private var ry = 0
     private var lt = 0
     private var rt = 0
+    private var up = false
+    private var right = false
+    private var down = false
+    private var left = false
 
     private val callback = object : BluetoothHidDevice.Callback() {
         override fun onAppStatusChanged(pluggedDevice: BluetoothDevice?, isRegistered: Boolean) {
@@ -79,32 +79,41 @@ class HidGamepadService : Service() {
         super.onCreate()
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification("Inicializando Bluetooth HID…"))
-        if (Build.VERSION.SDK_INT >= 28) {
-            val adapter = BluetoothAdapter.getDefaultAdapter()
-            if (adapter == null) {
-                notifyState("Bluetooth não disponível neste celular")
-                return
-            }
-            adapter.getProfileProxy(this, profileListener, BluetoothProfile.HID_DEVICE)
+        val adapter = BluetoothAdapter.getDefaultAdapter()
+        if (Build.VERSION.SDK_INT < 28 || adapter == null) {
+            notifyState("Este celular não oferece Bluetooth HID Device")
+            return
         }
+        try {
+            adapter.getProfileProxy(this, profileListener, BluetoothProfile.HID_DEVICE)
+        } catch (_: Exception) {
+            notifyState("Bluetooth HID Device não é suportado neste celular")
+        }
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_CONNECT -> intent.getStringExtra(EXTRA_ADDRESS)?.let { connectTo(it) }
+            ACTION_DISCONNECT -> disconnectHost()
+        }
+        return START_STICKY
     }
 
     private fun registerHid() {
         val device = hid ?: return
-        try {
-            device.unregisterApp()
-        } catch (_: Exception) { }
+        try { device.unregisterApp() } catch (_: Exception) { }
 
+        val subclass = (BluetoothHidDevice.SUBCLASS1_NONE.toInt() or BluetoothHidDevice.SUBCLASS2_GAMEPAD.toInt()).toByte()
         val sdp = BluetoothHidDeviceAppSdpSettings(
             DEVICE_NAME,
             "ControlBridge Gamepad",
             "ControlBridge",
-            BluetoothHidDevice.SUBCLASS1_NONE or BluetoothHidDevice.SUBCLASS2_GAMEPAD,
+            subclass,
             REPORT_DESCRIPTOR
         )
         val ok = try {
             device.registerApp(sdp, null, null, Executors.newSingleThreadExecutor(), callback)
-        } catch (e: SecurityException) {
+        } catch (_: SecurityException) {
             notifyState("Permissão Bluetooth bloqueada")
             false
         } catch (e: Exception) {
@@ -116,19 +125,14 @@ class HidGamepadService : Service() {
 
     private fun connectSavedHost() {
         val address = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_HOST, null) ?: return
-        val adapter = BluetoothAdapter.getDefaultAdapter() ?: return
-        try {
-            val device = adapter.getRemoteDevice(address)
-            host = device
-            hid?.connect(device)
-            notifyState("Conectando à TV…")
-        } catch (_: Exception) {
-            notifyState("Não foi possível conectar à TV")
-        }
+        connectTo(address)
     }
 
-    fun connectTo(address: String): Boolean {
-        if (!registered) return false
+    private fun connectTo(address: String): Boolean {
+        if (!registered) {
+            notifyState("HID ainda não está registrado")
+            return false
+        }
         val adapter = BluetoothAdapter.getDefaultAdapter() ?: return false
         return try {
             val device = adapter.getRemoteDevice(address)
@@ -136,11 +140,12 @@ class HidGamepadService : Service() {
             saveHost(device)
             hid?.connect(device) == true
         } catch (_: Exception) {
+            notifyState("Não foi possível conectar à TV")
             false
         }
     }
 
-    fun disconnectHost() {
+    private fun disconnectHost() {
         host?.let { try { hid?.disconnect(it) } catch (_: Exception) {} }
         host = null
         notifyState()
@@ -170,22 +175,16 @@ class HidGamepadService : Service() {
         ly = stick(event, MotionEvent.AXIS_Y)
         rx = stick(event, MotionEvent.AXIS_Z)
         ry = stick(event, MotionEvent.AXIS_RZ)
-        lt = trigger(event, MotionEvent.AXIS_LTRIGGER, MotionEvent.AXIS_BRAKE, MotionEvent.AXIS_Z)
-        rt = trigger(event, MotionEvent.AXIS_RTRIGGER, MotionEvent.AXIS_GAS, MotionEvent.AXIS_RZ)
+        lt = trigger(event, MotionEvent.AXIS_LTRIGGER)
+        rt = trigger(event, MotionEvent.AXIS_RTRIGGER)
         sendReport()
     }
 
-    private fun stick(event: MotionEvent, axis: Int): Int {
-        val value = event.getAxisValue(axis).coerceIn(-1f, 1f)
-        return (value * 32767f).roundToInt()
-    }
+    private fun stick(event: MotionEvent, axis: Int): Int =
+        (event.getAxisValue(axis).coerceIn(-1f, 1f) * 32767f).roundToInt()
 
-    private fun trigger(event: MotionEvent, primary: Int, secondary: Int, fallback: Int): Int {
-        var value = event.getAxisValue(primary)
-        if (value == 0f) value = event.getAxisValue(secondary)
-        if (value == 0f && primary != fallback) value = ((event.getAxisValue(fallback) + 1f) / 2f)
-        return (value.coerceIn(0f, 1f) * 255f).roundToInt()
-    }
+    private fun trigger(event: MotionEvent, axis: Int): Int =
+        (event.getAxisValue(axis).coerceIn(0f, 1f) * 255f).roundToInt()
 
     private fun dpad(direction: Int, pressed: Boolean) {
         when (direction) {
@@ -206,11 +205,6 @@ class HidGamepadService : Service() {
             else -> 8
         }
     }
-
-    private var up = false
-    private var right = false
-    private var down = false
-    private var left = false
 
     private fun buttonBit(code: Int): Int = when (code) {
         KeyEvent.KEYCODE_BUTTON_A -> 0
@@ -258,10 +252,9 @@ class HidGamepadService : Service() {
             hid == null -> "Bluetooth HID indisponível"
             !registered -> "Pronto para registrar"
             host != null -> "TV: ${host?.name ?: "conectando"}"
-            else -> "HID ativo • conecte a TV pelo Bluetooth"
+            else -> "HID ativo • pronto para parear"
         }
-        val nm = getSystemService(NotificationManager::class.java)
-        nm.notify(NOTIFICATION_ID, buildNotification(text))
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(text))
     }
 
     private fun buildNotification(text: String): Notification =
@@ -274,8 +267,9 @@ class HidGamepadService : Service() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
-            val nm = getSystemService(NotificationManager::class.java)
-            nm.createNotificationChannel(NotificationChannel(CHANNEL_ID, "ControlBridge", NotificationManager.IMPORTANCE_LOW))
+            getSystemService(NotificationManager::class.java).createNotificationChannel(
+                NotificationChannel(CHANNEL_ID, "ControlBridge", NotificationManager.IMPORTANCE_LOW)
+            )
         }
     }
 
@@ -296,6 +290,9 @@ class HidGamepadService : Service() {
         const val REPORT_ID = 1
         const val CHANNEL_ID = "controlbridge_hid"
         const val NOTIFICATION_ID = 47600
+        const val ACTION_CONNECT = "com.controlbridge.mobile.CONNECT_TV"
+        const val ACTION_DISCONNECT = "com.controlbridge.mobile.DISCONNECT_TV"
+        const val EXTRA_ADDRESS = "address"
 
         // 13-byte report: LX, LY, LT, RT, RX, RY, 16 buttons, hat switch.
         val REPORT_DESCRIPTOR = byteArrayOf(
