@@ -2,14 +2,13 @@ package com.controlbridge.mobile
 
 import android.Manifest
 import android.app.Activity
-import android.bluetooth.BluetoothDevice
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
-import android.graphics.RadialGradient
+import android.graphics.RectF
 import android.graphics.Shader
 import android.os.Build
 import android.os.Bundle
@@ -20,7 +19,9 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.widget.Toast
+import kotlin.math.cos
 import kotlin.math.hypot
+import kotlin.math.sin
 
 class MainActivity : Activity() {
     private lateinit var hud: ControllerHud
@@ -35,8 +36,10 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
-        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
-            View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+        window.decorView.systemUiVisibility =
+            View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
 
         hud = ControllerHud()
         setContentView(hud)
@@ -49,25 +52,31 @@ class MainActivity : Activity() {
                 hud.invalidate()
             }
         }
-        if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+
+        if (Build.VERSION.SDK_INT >= 31 &&
+            checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
+        ) {
             requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT), 40)
         } else {
             hid.start()
         }
 
-        hud.postDelayed({ refreshController() }, 300)
+        hud.postDelayed({ refreshController() }, 250)
         hud.post(object : Runnable {
             override fun run() {
                 hud.invalidate()
-                hud.postDelayed(this, 32)
+                hud.postDelayed(this, 50)
             }
         })
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 40 && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) hid.start()
-        else Toast.makeText(this, "Bluetooth é necessário para conectar a TV como gamepad.", Toast.LENGTH_LONG).show()
+        if (requestCode == 40 && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+            hid.start()
+        } else if (requestCode == 40) {
+            Toast.makeText(this, "O Bluetooth é necessário para usar a TV como gamepad.", Toast.LENGTH_LONG).show()
+        }
     }
 
     override fun onDestroy() {
@@ -84,12 +93,12 @@ class MainActivity : Activity() {
         val down = event.action == KeyEvent.ACTION_DOWN
         if (isDpad(event.keyCode)) hid.setDpad(event.keyCode, down) else hid.setButton(event.keyCode, down)
         bridge.broadcast("{\"type\":\"key\",\"key\":${event.keyCode},\"action\":${event.action},\"connected\":true}")
-        hud.setPressed(event.keyCode, down)
+        hud.setPhysicalPressed(event.keyCode, down)
         return true
     }
 
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
-        if (!isGamepad(event.device) || event.action != MotionEvent.ACTION_MOVE) return super.onGenericMotionEvent(event)
+        if (!isGamepad(event.device) || event.actionMasked != MotionEvent.ACTION_MOVE) return super.onGenericMotionEvent(event)
         physicalConnected = true
         controllerName = event.device?.name ?: "Gamepad"
         lastInputAt = SystemClock.elapsedRealtime()
@@ -132,13 +141,14 @@ class MainActivity : Activity() {
     private fun chooseTv() {
         val devices = hid.bondedDevices()
         if (devices.isEmpty()) {
-            Toast.makeText(this, "Primeiro pareie o celular com a TV pelo Bluetooth.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Pareie o celular com a TV pelo Bluetooth primeiro.", Toast.LENGTH_LONG).show()
             openBluetoothSettings()
             return
         }
         val names = devices.map { it.name ?: it.address }.toTypedArray()
         android.app.AlertDialog.Builder(this)
-            .setTitle("Escolher TV / host")
+            .setTitle("Conectar à TV")
+            .setMessage("Escolha o dispositivo Bluetooth que deve receber o controle.")
             .setItems(names) { _, which -> hid.connect(devices[which]) }
             .setNegativeButton("Cancelar", null)
             .show()
@@ -146,142 +156,246 @@ class MainActivity : Activity() {
 
     private inner class ControllerHud : View(this@MainActivity) {
         private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val rect = RectF()
+        private val physicalPressed = HashSet<Int>()
+        private val touchPressed = HashSet<Int>()
+        private val touchTargets = HashMap<Int, Int>()
+        private var leftPointer = -1
+        private var rightPointer = -1
         private var lx = 0f
         private var ly = 0f
         private var rx = 0f
         private var ry = 0f
-        private val pressed = HashSet<Int>()
-        private val pointers = HashMap<Int, Int>()
-        private var leftPointer = -1
-        private var rightPointer = -1
-        private var tvStatus = "Preparando Bluetooth HID…"
+        var tvStatus = "Preparando Bluetooth HID…"
 
-        init { isFocusable = true; setBackgroundColor(Color.rgb(5, 7, 12)) }
+        private val blue = Color.rgb(91, 126, 255)
+        private val green = Color.rgb(88, 222, 159)
 
-        fun setAxes(a: Float, b: Float, c: Float, d: Float) { lx = a; ly = b; rx = c; ry = d; invalidate() }
-        fun setPressed(key: Int, down: Boolean) { if (down) pressed.add(key) else pressed.remove(key); invalidate() }
+        init {
+            isFocusable = true
+            setBackgroundColor(Color.rgb(5, 7, 12))
+        }
+
+        fun setAxes(a: Float, b: Float, c: Float, d: Float) {
+            lx = a; ly = b; rx = c; ry = d
+            invalidate()
+        }
+
+        fun setPhysicalPressed(key: Int, down: Boolean) {
+            if (down) physicalPressed.add(key) else physicalPressed.remove(key)
+            invalidate()
+        }
 
         override fun onDraw(c: Canvas) {
-            val w = width.toFloat(); val h = height.toFloat()
-            val t = SystemClock.uptimeMillis() / 1000f
+            super.onDraw(c)
+            val w = width.toFloat()
+            val h = height.toFloat()
+            val unit = minOf(w, h)
+            val top = unit * 0.105f
+            val controlY = h * 0.70f
+            val leftStickX = w * 0.235f
+            val rightStickX = w * 0.765f
+            val dpadX = w * 0.105f
+            val faceX = w * 0.895f
 
-            p.shader = LinearGradient(0f, 0f, w, h, Color.rgb(5, 7, 12), Color.rgb(10, 14, 23), Shader.TileMode.CLAMP)
-            c.drawRect(0f, 0f, w, h, p); p.shader = null
-            p.shader = RadialGradient(w * .5f, h * .45f, h * .7f, Color.argb(35, 82, 108, 255), Color.TRANSPARENT, Shader.TileMode.CLAMP)
-            c.drawRect(0f, 0f, w, h, p); p.shader = null
+            p.shader = LinearGradient(0f, 0f, w, h, Color.rgb(4, 6, 11), Color.rgb(11, 15, 25), Shader.TileMode.CLAMP)
+            c.drawRect(0f, 0f, w, h, p)
+            p.shader = null
 
-            // Minimal top bar — no giant card, only the information that matters while playing.
-            p.color = Color.argb(190, 8, 11, 18)
-            c.drawRoundRect(22f, 16f, w - 22f, 66f, 25f, 25f, p)
-            p.color = Color.WHITE; p.textSize = 13f; p.typeface = android.graphics.Typeface.DEFAULT_BOLD
-            c.drawText("CONTROLBRIDGE", 42f, 47f, p)
-            p.color = Color.rgb(115, 127, 151); p.textSize = 9f; p.typeface = android.graphics.Typeface.DEFAULT
-            c.drawText("BLUETOOTH HID GAMEPAD", 42f, 59f, p)
+            // Very restrained ambient glow: the HUD stays readable without looking like a dashboard.
+            p.color = Color.argb(18, 90, 120, 255)
+            c.drawCircle(w * .50f, h * .48f, unit * .48f, p)
 
-            val tvColor = if (tvConnected) Color.rgb(96, 236, 164) else Color.rgb(255, 183, 88)
-            p.color = Color.argb(35, Color.red(tvColor), Color.green(tvColor), Color.blue(tvColor)); c.drawRoundRect(w - 285f, 26f, w - 155f, 56f, 15f, 15f, p)
-            p.color = tvColor; c.drawCircle(w - 268f, 41f, 4f, p); p.color = Color.rgb(205, 214, 229); p.textSize = 9f
-            c.drawText(if (tvConnected) "TV CONECTADA" else "TV OFFLINE", w - 258f, 45f, p)
-            p.color = Color.argb(42, 120, 145, 255); c.drawRoundRect(w - 145f, 26f, w - 38f, 56f, 15f, 15f, p)
-            p.color = Color.rgb(151, 174, 255); c.drawText("CONECTAR", w - 128f, 45f, p)
-
-            val leftX = w * .20f; val rightX = w * .80f; val cy = h * .70f
-            drawStick(c, leftX, cy, lx, ly, "L3")
-            drawStick(c, rightX, cy, rx, ry, "R3")
-            drawDpad(c, w * .09f, cy)
-            drawFaceCluster(c, w * .88f, cy)
-
-            // Shoulder controls sit high and stay out of the game area.
-            drawPillButton(c, w * .27f, 96f, 92f, 32f, "L1", KeyEvent.KEYCODE_BUTTON_L1)
-            drawPillButton(c, w * .34f, 96f, 112f, 32f, "L2", KeyEvent.KEYCODE_BUTTON_L2)
-            drawPillButton(c, w * .73f, 96f, 112f, 32f, "R2", KeyEvent.KEYCODE_BUTTON_R2)
-            drawPillButton(c, w * .80f, 96f, 92f, 32f, "R1", KeyEvent.KEYCODE_BUTTON_R1)
-
-            // Center controls.
-            drawSmallButton(c, w * .47f, h * .68f, 58f, "SELECT", KeyEvent.KEYCODE_BUTTON_SELECT)
-            drawSmallButton(c, w * .53f, h * .68f, 58f, "START", KeyEvent.KEYCODE_BUTTON_START)
-
-            p.color = Color.rgb(104, 116, 139); p.textSize = 8f
-            c.drawText("${controllerName.take(24)}  •  $tvStatus", 30f, h - 20f, p)
-            val pulse = (0.5f + 0.5f * kotlin.math.sin(t * 4f)).toFloat()
-            p.color = Color.argb((20 + pulse * 25).toInt(), 105, 137, 255)
-            c.drawCircle(w / 2f, h - 23f, 5f, p)
+            drawHeader(c, w, top)
+            drawShoulders(c, w, top)
+            drawStick(c, leftStickX, controlY, lx, ly, "L3", unit)
+            drawStick(c, rightStickX, controlY, rx, ry, "R3", unit)
+            drawDpad(c, dpadX, controlY, unit)
+            drawFaceCluster(c, faceX, controlY, unit)
+            drawCenterButtons(c, w, h, unit)
+            drawFooter(c, w, h)
         }
 
-        private fun drawStick(c: Canvas, cx: Float, cy: Float, sx: Float, sy: Float, label: String) {
-            p.color = Color.argb(45, 150, 170, 220); c.drawCircle(cx, cy, 72f, p)
-            p.color = Color.argb(155, 17, 22, 34); c.drawCircle(cx, cy, 59f, p)
-            p.style = Paint.Style.STROKE; p.strokeWidth = 2f; p.color = Color.argb(90, 119, 144, 190); c.drawCircle(cx, cy, 59f, p); p.style = Paint.Style.FILL
-            val px = cx + sx * 38f; val py = cy + sy * 38f
-            p.color = Color.argb(55, 112, 144, 255); c.drawCircle(px, py, 30f, p)
-            p.color = Color.rgb(73, 88, 117); c.drawCircle(px, py, 23f, p)
-            p.color = Color.rgb(178, 188, 208); c.drawCircle(px - sx * 2f, py - sy * 2f, 11f, p)
-            p.color = Color.rgb(94, 108, 135); p.textSize = 8f; c.drawText(label, cx - 8f, cy + 91f, p)
+        private fun drawHeader(c: Canvas, w: Float, y: Float) {
+            val height = 50f
+            p.color = Color.argb(185, 9, 12, 20)
+            c.drawRoundRect(20f, 12f, w - 20f, 12f + height, 24f, 24f, p)
+
+            p.color = Color.WHITE
+            p.typeface = android.graphics.Typeface.DEFAULT_BOLD
+            p.textSize = 13f
+            c.drawText("CONTROLBRIDGE", 40f, y + 5f, p)
+
+            p.color = Color.rgb(106, 118, 143)
+            p.typeface = android.graphics.Typeface.DEFAULT
+            p.textSize = 8f
+            c.drawText("PHONE GAMEPAD  •  BLUETOOTH HID", 40f, y + 19f, p)
+
+            val statusColor = if (tvConnected) green else Color.rgb(245, 177, 82)
+            p.color = Color.argb(30, Color.red(statusColor), Color.green(statusColor), Color.blue(statusColor))
+            c.drawRoundRect(w - 220f, 22f, w - 116f, 50f, 14f, 14f, p)
+            p.color = statusColor
+            c.drawCircle(w - 204f, 36f, 4f, p)
+            p.color = Color.rgb(207, 215, 231)
+            p.textSize = 8f
+            c.drawText(if (tvConnected) "TV CONECTADA" else "TV NÃO CONECTADA", w - 194f, 39f, p)
+
+            p.color = Color.argb(42, Color.red(blue), Color.green(blue), Color.blue(blue))
+            c.drawRoundRect(w - 104f, 22f, w - 32f, 50f, 14f, 14f, p)
+            p.color = Color.rgb(151, 173, 255)
+            p.textAlign = Paint.Align.CENTER
+            c.drawText("CONECTAR", w - 68f, 39f, p)
+            p.textAlign = Paint.Align.LEFT
         }
 
-        private fun drawDpad(c: Canvas, cx: Float, cy: Float) {
-            val s = 30f
-            p.color = Color.argb(175, 17, 22, 34)
-            c.drawRoundRect(cx - s, cy - s * 2.1f, cx + s, cy + s * 2.1f, 12f, 12f, p)
-            c.drawRoundRect(cx - s * 2.1f, cy - s, cx + s * 2.1f, cy + s, 12f, 12f, p)
-            p.color = Color.rgb(170, 181, 202); p.textSize = 18f; p.textAlign = Paint.Align.CENTER
-            c.drawText("↑", cx, cy - 31f, p); c.drawText("↓", cx, cy + 39f, p); c.drawText("←", cx - 36f, cy + 6f, p); c.drawText("→", cx + 36f, cy + 6f, p); p.textAlign = Paint.Align.LEFT
+        private fun drawShoulders(c: Canvas, w: Float, y: Float) {
+            drawPill(c, w * .25f, y + 1f, 74f, 30f, "L1", KeyEvent.KEYCODE_BUTTON_L1)
+            drawPill(c, w * .35f, y + 1f, 82f, 30f, "L2", KeyEvent.KEYCODE_BUTTON_L2)
+            drawPill(c, w * .65f, y + 1f, 82f, 30f, "R2", KeyEvent.KEYCODE_BUTTON_R2)
+            drawPill(c, w * .75f, y + 1f, 74f, 30f, "R1", KeyEvent.KEYCODE_BUTTON_R1)
         }
 
-        private fun drawFaceCluster(c: Canvas, cx: Float, cy: Float) {
-            drawRoundFace(c, cx, cy - 65f, "Y", KeyEvent.KEYCODE_BUTTON_Y, Color.rgb(245, 197, 89))
-            drawRoundFace(c, cx + 65f, cy, "B", KeyEvent.KEYCODE_BUTTON_B, Color.rgb(240, 101, 118))
-            drawRoundFace(c, cx - 65f, cy, "X", KeyEvent.KEYCODE_BUTTON_X, Color.rgb(91, 155, 246))
-            drawRoundFace(c, cx, cy + 65f, "A", KeyEvent.KEYCODE_BUTTON_A, Color.rgb(88, 220, 154))
+        private fun drawStick(c: Canvas, cx: Float, cy: Float, sx: Float, sy: Float, label: String, unit: Float) {
+            val outer = unit * .102f
+            val inner = unit * .082f
+            val knob = unit * .040f
+            p.color = Color.argb(36, 150, 170, 220)
+            c.drawCircle(cx, cy, outer, p)
+            p.color = Color.argb(190, 12, 17, 28)
+            c.drawCircle(cx, cy, inner, p)
+            p.style = Paint.Style.STROKE
+            p.strokeWidth = 2f
+            p.color = Color.argb(75, 125, 148, 201)
+            c.drawCircle(cx, cy, inner, p)
+            p.style = Paint.Style.FILL
+
+            val magnitude = hypot(sx.toDouble(), sy.toDouble()).coerceAtMost(1.0).toFloat()
+            val nx = if (magnitude > .03f) sx / magnitude else 0f
+            val ny = if (magnitude > .03f) sy / magnitude else 0f
+            val travel = unit * .052f
+            val px = cx + nx * travel * magnitude
+            val py = cy + ny * travel * magnitude
+
+            p.color = Color.argb(45, Color.red(blue), Color.green(blue), Color.blue(blue))
+            c.drawCircle(px, py, knob + 10f, p)
+            p.color = Color.rgb(54, 66, 91)
+            c.drawCircle(px, py, knob, p)
+            p.color = Color.rgb(181, 192, 211)
+            c.drawCircle(px - nx * 2f, py - ny * 2f, knob * .45f, p)
+
+            p.color = Color.rgb(103, 116, 143)
+            p.textSize = 8f
+            p.textAlign = Paint.Align.CENTER
+            c.drawText(label, cx, cy + outer + 17f, p)
+            p.textAlign = Paint.Align.LEFT
         }
 
-        private fun drawRoundFace(c: Canvas, x: Float, y: Float, label: String, key: Int, accent: Int) {
-            val down = pressed.contains(key); val r = if (down) 25f else 23f
-            p.color = Color.argb(if (down) 100 else 35, Color.red(accent), Color.green(accent), Color.blue(accent)); c.drawCircle(x, y, r + 8f, p)
-            p.color = if (down) accent else Color.argb(215, 28, 36, 52); c.drawCircle(x, y, r, p)
-            p.color = if (down) Color.WHITE else Color.rgb(190, 201, 220); p.textSize = 14f; p.typeface = android.graphics.Typeface.DEFAULT_BOLD; p.textAlign = Paint.Align.CENTER
-            c.drawText(label, x, y + 5f, p); p.textAlign = Paint.Align.LEFT
+        private fun drawDpad(c: Canvas, cx: Float, cy: Float, unit: Float) {
+            val arm = unit * .043f
+            val gap = unit * .006f
+            p.color = Color.argb(185, 16, 22, 34)
+            c.drawRoundRect(cx - arm, cy - arm * 3.0f, cx + arm, cy + arm * 3.0f, 12f, 12f, p)
+            c.drawRoundRect(cx - arm * 3.0f, cy - arm, cx + arm * 3.0f, cy + arm, 12f, 12f, p)
+            drawDpadGlyph(c, cx, cy - arm * 1.85f, "↑", KeyEvent.KEYCODE_DPAD_UP)
+            drawDpadGlyph(c, cx, cy + arm * 1.95f, "↓", KeyEvent.KEYCODE_DPAD_DOWN)
+            drawDpadGlyph(c, cx - arm * 1.9f, cy + 5f, "←", KeyEvent.KEYCODE_DPAD_LEFT)
+            drawDpadGlyph(c, cx + arm * 1.9f, cy + 5f, "→", KeyEvent.KEYCODE_DPAD_RIGHT)
         }
 
-        private fun drawPillButton(c: Canvas, x: Float, y: Float, width: Float, height: Float, label: String, key: Int) {
-            val down = pressed.contains(key); p.color = if (down) Color.rgb(98, 133, 242) else Color.argb(180, 24, 31, 46)
-            c.drawRoundRect(x - width / 2f, y - height / 2f, x + width / 2f, y + height / 2f, 16f, 16f, p)
-            p.color = Color.rgb(172, 184, 205); p.textSize = 9f; p.textAlign = Paint.Align.CENTER; c.drawText(label, x, y + 3f, p); p.textAlign = Paint.Align.LEFT
+        private fun drawDpadGlyph(c: Canvas, x: Float, y: Float, text: String, key: Int) {
+            p.color = if (isPressed(key)) Color.WHITE else Color.rgb(165, 178, 202)
+            p.textSize = 18f
+            p.typeface = android.graphics.Typeface.DEFAULT_BOLD
+            p.textAlign = Paint.Align.CENTER
+            c.drawText(text, x, y + 6f, p)
+            p.textAlign = Paint.Align.LEFT
         }
 
-        private fun drawSmallButton(c: Canvas, x: Float, y: Float, width: Float, label: String, key: Int) {
-            p.color = if (pressed.contains(key)) Color.rgb(86, 120, 224) else Color.argb(155, 22, 28, 42)
-            c.drawRoundRect(x - width / 2f, y - 15f, x + width / 2f, y + 15f, 15f, 15f, p)
-            p.color = Color.rgb(142, 153, 174); p.textSize = 7f; p.textAlign = Paint.Align.CENTER; c.drawText(label, x, y + 3f, p); p.textAlign = Paint.Align.LEFT
+        private fun drawFaceCluster(c: Canvas, cx: Float, cy: Float, unit: Float) {
+            val d = unit * .082f
+            drawFace(c, cx, cy - d, "Y", KeyEvent.KEYCODE_BUTTON_Y, Color.rgb(244, 197, 81))
+            drawFace(c, cx + d, cy, "B", KeyEvent.KEYCODE_BUTTON_B, Color.rgb(238, 103, 120))
+            drawFace(c, cx - d, cy, "X", KeyEvent.KEYCODE_BUTTON_X, Color.rgb(91, 155, 246))
+            drawFace(c, cx, cy + d, "A", KeyEvent.KEYCODE_BUTTON_A, Color.rgb(86, 220, 154))
         }
 
-        override fun onTouchEvent(e: MotionEvent): Boolean {
-            when (e.actionMasked) {
+        private fun drawFace(c: Canvas, x: Float, y: Float, label: String, key: Int, accent: Int) {
+            val down = isPressed(key)
+            val radius = if (down) 25f else 22f
+            p.color = Color.argb(if (down) 80 else 28, Color.red(accent), Color.green(accent), Color.blue(accent))
+            c.drawCircle(x, y, radius + 9f, p)
+            p.color = if (down) accent else Color.rgb(28, 36, 52)
+            c.drawCircle(x, y, radius, p)
+            p.color = if (down) Color.WHITE else Color.rgb(190, 202, 222)
+            p.textSize = 14f
+            p.typeface = android.graphics.Typeface.DEFAULT_BOLD
+            p.textAlign = Paint.Align.CENTER
+            c.drawText(label, x, y + 5f, p)
+            p.textAlign = Paint.Align.LEFT
+        }
+
+        private fun drawPill(c: Canvas, x: Float, y: Float, width: Float, height: Float, label: String, key: Int) {
+            p.color = if (isPressed(key)) blue else Color.argb(175, 22, 29, 43)
+            c.drawRoundRect(x - width / 2f, y - height / 2f, x + width / 2f, y + height / 2f, height / 2f, height / 2f, p)
+            p.color = Color.rgb(177, 189, 210)
+            p.textSize = 9f
+            p.textAlign = Paint.Align.CENTER
+            c.drawText(label, x, y + 3f, p)
+            p.textAlign = Paint.Align.LEFT
+        }
+
+        private fun drawCenterButtons(c: Canvas, w: Float, h: Float, unit: Float) {
+            val y = h * .66f
+            drawCenterButton(c, w * .475f, y, "SELECT", KeyEvent.KEYCODE_BUTTON_SELECT, unit)
+            drawCenterButton(c, w * .525f, y, "START", KeyEvent.KEYCODE_BUTTON_START, unit)
+        }
+
+        private fun drawCenterButton(c: Canvas, x: Float, y: Float, label: String, key: Int, unit: Float) {
+            val width = unit * .085f
+            val height = unit * .036f
+            p.color = if (isPressed(key)) Color.rgb(79, 112, 218) else Color.argb(145, 22, 28, 41)
+            c.drawRoundRect(x - width / 2f, y - height / 2f, x + width / 2f, y + height / 2f, height, height, p)
+            p.color = Color.rgb(146, 159, 184)
+            p.textSize = 7f
+            p.textAlign = Paint.Align.CENTER
+            c.drawText(label, x, y + 2.5f, p)
+            p.textAlign = Paint.Align.LEFT
+        }
+
+        private fun drawFooter(c: Canvas, w: Float, h: Float) {
+            val age = SystemClock.elapsedRealtime() - lastInputAt
+            val active = physicalConnected && age < 2500L
+            val status = if (active) "${controllerName.take(24)}  •  CONTROLE FÍSICO" else "${controllerName.take(24)}  •  TOQUE ATIVO"
+            p.color = Color.rgb(93, 106, 133)
+            p.textSize = 8f
+            c.drawText(status, 24f, h - 17f, p)
+            p.color = if (tvConnected) green else Color.rgb(103, 115, 139)
+            c.drawCircle(w - 27f, h - 20f, 4f, p)
+        }
+
+        private fun isPressed(key: Int): Boolean = physicalPressed.contains(key) || touchPressed.contains(key)
+
+        override fun onTouchEvent(event: MotionEvent): Boolean {
+            val action = event.actionMasked
+            val index = event.actionIndex
+            when (action) {
                 MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
-                    val index = e.actionIndex; val id = e.getPointerId(index); val x = e.getX(index); val y = e.getY(index)
-                    if (x > width - 160f && y < 75f) { chooseTv(); return true }
-                    val zone = zoneAt(x, y)
-                    if (zone == ZONE_LEFT_STICK && leftPointer == -1) { leftPointer = id; pointers[id] = zone; updateStick(true, x, y) }
-                    else if (zone == ZONE_RIGHT_STICK && rightPointer == -1) { rightPointer = id; pointers[id] = zone; updateStick(false, x, y) }
-                    else if (zone != 0) { pointers[id] = zone; sendZone(zone, true) }
+                    val id = event.getPointerId(index)
+                    handlePointerDown(id, event.getX(index), event.getY(index))
                     return true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    for (i in 0 until e.pointerCount) {
-                        val id = e.getPointerId(i); when (pointers[id]) {
-                            ZONE_LEFT_STICK -> updateStick(true, e.getX(i), e.getY(i))
-                            ZONE_RIGHT_STICK -> updateStick(false, e.getX(i), e.getY(i))
-                        }
+                    for (i in 0 until event.pointerCount) {
+                        handlePointerMove(event.getPointerId(i), event.getX(i), event.getY(i))
                     }
                     return true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
-                    val index = e.actionIndex; val id = e.getPointerId(index); val zone = pointers.remove(id)
-                    when (zone) {
-                        ZONE_LEFT_STICK -> { if (leftPointer == id) leftPointer = -1; updateStick(true, -1f, -1f) }
-                        ZONE_RIGHT_STICK -> { if (rightPointer == id) rightPointer = -1; updateStick(false, -1f, -1f) }
-                        null -> Unit
-                        else -> sendZone(zone, false)
+                    val id = if (action == MotionEvent.ACTION_CANCEL) -1 else event.getPointerId(index)
+                    if (id == -1) {
+                        touchTargets.keys.toList().forEach { releasePointer(it) }
+                    } else {
+                        releasePointer(id)
                     }
                     return true
                 }
@@ -289,60 +403,83 @@ class MainActivity : Activity() {
             return true
         }
 
-        private fun updateStick(left: Boolean, x: Float, y: Float) {
-            val cx = if (left) width * .20f else width * .80f; val cy = height * .70f
-            if (x < 0f) { if (left) { lx = 0f; ly = 0f } else { rx = 0f; ry = 0f } }
-            else {
-                val dx = ((x - cx) / 65f).coerceIn(-1f, 1f); val dy = ((y - cy) / 65f).coerceIn(-1f, 1f)
-                if (left) { lx = dx; ly = dy } else { rx = dx; ry = dy }
+        private fun handlePointerDown(id: Int, x: Float, y: Float) {
+            if (x > width - 125f && y < 75f) {
+                chooseTv()
+                return
             }
-            hid.updateAxis(lx, ly, rx, ry); invalidate()
-        }
 
-        private fun zoneAt(x: Float, y: Float): Int {
-            val cy = height * .70f
-            if (hypot((x - width * .20f).toDouble(), (y - cy).toDouble()) < 85) return ZONE_LEFT_STICK
-            if (hypot((x - width * .80f).toDouble(), (y - cy).toDouble()) < 85) return ZONE_RIGHT_STICK
-            val face = arrayOf(
-                floatArrayOf(width * .88f, cy - 65f, KeyEvent.KEYCODE_BUTTON_Y.toFloat()),
-                floatArrayOf(width * .88f + 65f, cy, KeyEvent.KEYCODE_BUTTON_B.toFloat()),
-                floatArrayOf(width * .88f - 65f, cy, KeyEvent.KEYCODE_BUTTON_X.toFloat()),
-                floatArrayOf(width * .88f, cy + 65f, KeyEvent.KEYCODE_BUTTON_A.toFloat())
-            )
-            for (f in face) if (hypot((x - f[0]).toDouble(), (y - f[1]).toDouble()) < 34) return f[2].toInt()
-            val dCx = width * .09f
-            if (hypot((x - dCx).toDouble(), (y - cy).toDouble()) < 78) {
-                return when {
-                    y < cy - 22 -> KeyEvent.KEYCODE_DPAD_UP
-                    y > cy + 22 -> KeyEvent.KEYCODE_DPAD_DOWN
-                    x < dCx - 22 -> KeyEvent.KEYCODE_DPAD_LEFT
-                    else -> KeyEvent.KEYCODE_DPAD_RIGHT
+            val w = width.toFloat(); val h = height.toFloat(); val unit = minOf(w, h); val cy = h * .70f
+            val leftX = w * .235f; val rightX = w * .765f
+            val dpadX = w * .105f; val faceX = w * .895f
+            val target = when {
+                distance(x, y, leftX, cy) < unit * .13f -> -1
+                distance(x, y, rightX, cy) < unit * .13f -> -2
+                distance(x, y, faceX, cy - unit * .082f) < unit * .047f -> KeyEvent.KEYCODE_BUTTON_Y
+                distance(x, y, faceX + unit * .082f, cy) < unit * .047f -> KeyEvent.KEYCODE_BUTTON_B
+                distance(x, y, faceX - unit * .082f, cy) < unit * .047f -> KeyEvent.KEYCODE_BUTTON_X
+                distance(x, y, faceX, cy + unit * .082f) < unit * .047f -> KeyEvent.KEYCODE_BUTTON_A
+                distance(x, y, dpadX, cy - unit * .080f) < unit * .060f -> KeyEvent.KEYCODE_DPAD_UP
+                distance(x, y, dpadX + unit * .080f, cy) < unit * .060f -> KeyEvent.KEYCODE_DPAD_RIGHT
+                distance(x, y, dpadX, cy + unit * .080f) < unit * .060f -> KeyEvent.KEYCODE_DPAD_DOWN
+                distance(x, y, dpadX - unit * .080f, cy) < unit * .060f -> KeyEvent.KEYCODE_DPAD_LEFT
+                distance(x, y, w * .25f, unit * .105f + 1f) < 48f -> KeyEvent.KEYCODE_BUTTON_L1
+                distance(x, y, w * .35f, unit * .105f + 1f) < 52f -> KeyEvent.KEYCODE_BUTTON_L2
+                distance(x, y, w * .65f, unit * .105f + 1f) < 52f -> KeyEvent.KEYCODE_BUTTON_R2
+                distance(x, y, w * .75f, unit * .105f + 1f) < 48f -> KeyEvent.KEYCODE_BUTTON_R1
+                distance(x, y, w * .475f, h * .66f) < unit * .055f -> KeyEvent.KEYCODE_BUTTON_SELECT
+                distance(x, y, w * .525f, h * .66f) < unit * .055f -> KeyEvent.KEYCODE_BUTTON_START
+                else -> 0
+            }
+            if (target != 0) {
+                touchTargets[id] = target
+                if (target == -1) leftPointer = id
+                else if (target == -2) rightPointer = id
+                else if (target > 0) {
+                    touchPressed.add(target)
+                    if (isDpad(target)) hid.setDpad(target, true) else hid.setButton(target, true)
                 }
-            }
-            if (y in 75f..115f) return when {
-                x < width * .31f -> KeyEvent.KEYCODE_BUTTON_L1
-                x < width * .40f -> KeyEvent.KEYCODE_BUTTON_L2
-                x > width * .69f && x < width * .77f -> KeyEvent.KEYCODE_BUTTON_R2
-                x >= width * .77f -> KeyEvent.KEYCODE_BUTTON_R1
-                else -> 0
-            }
-            return when {
-                hypot((x - width * .47f).toDouble(), (y - height * .68f).toDouble()) < 35 -> KeyEvent.KEYCODE_BUTTON_SELECT
-                hypot((x - width * .53f).toDouble(), (y - height * .68f).toDouble()) < 35 -> KeyEvent.KEYCODE_BUTTON_START
-                else -> 0
+                if (target == -1 || target == -2) updateStick(id, x, y)
+                invalidate()
             }
         }
 
-        private fun sendZone(zone: Int, down: Boolean) {
-            if (zone == 0 || zone == ZONE_LEFT_STICK || zone == ZONE_RIGHT_STICK) return
-            lastInputAt = SystemClock.elapsedRealtime()
-            if (isDpad(zone)) hid.setDpad(zone, down) else hid.setButton(zone, down)
-            setPressed(zone, down)
+        private fun handlePointerMove(id: Int, x: Float, y: Float) {
+            when (touchTargets[id]) {
+                -1, -2 -> updateStick(id, x, y)
+            }
         }
 
-        companion object {
-            const val ZONE_LEFT_STICK = -100
-            const val ZONE_RIGHT_STICK = -101
+        private fun updateStick(id: Int, x: Float, y: Float) {
+            val w = width.toFloat(); val h = height.toFloat(); val unit = minOf(w, h); val cy = h * .70f
+            val isLeft = touchTargets[id] == -1
+            val cx = if (isLeft) w * .235f else w * .765f
+            val radius = unit * .078f
+            var dx = (x - cx) / radius
+            var dy = (y - cy) / radius
+            val length = hypot(dx.toDouble(), dy.toDouble()).coerceAtMost(1.0).toFloat()
+            if (length > 1f) { dx /= length; dy /= length }
+            if (isLeft) { lx = dx; ly = dy } else { rx = dx; ry = dy }
+            hid.updateAxis(lx, ly, rx, ry)
+            bridge.broadcast("{\"type\":\"motion\",\"lx\":$lx,\"ly\":$ly,\"rx\":$rx,\"ry\":$ry,\"lt\":0,\"rt\":0,\"connected\":true}")
+            invalidate()
         }
+
+        private fun releasePointer(id: Int) {
+            val target = touchTargets.remove(id) ?: return
+            if (target == -1) {
+                leftPointer = -1; lx = 0f; ly = 0f
+            } else if (target == -2) {
+                rightPointer = -1; rx = 0f; ry = 0f
+            } else if (target > 0) {
+                touchPressed.remove(target)
+                if (isDpad(target)) hid.setDpad(target, false) else hid.setButton(target, false)
+            }
+            if (target == -1 || target == -2) hid.updateAxis(lx, ly, rx, ry)
+            invalidate()
+        }
+
+        private fun distance(ax: Float, ay: Float, bx: Float, by: Float): Float =
+            hypot((ax - bx).toDouble(), (ay - by).toDouble()).toFloat()
     }
 }
