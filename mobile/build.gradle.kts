@@ -11,8 +11,8 @@ android {
         applicationId = "com.controlbridge.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "2.0"
+        versionCode = 3
+        versionName = "2.1"
     }
 
     compileOptions {
@@ -21,11 +21,6 @@ android {
     }
 
     kotlinOptions { jvmTarget = "17" }
-
-    sourceSets["main"].java {
-        exclude("**/MainActivity.kt")
-        exclude("**/MainActivityFixed.kt")
-    }
 }
 
 dependencies {
