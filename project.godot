@@ -13,6 +13,7 @@ window/stretch/mode="canvas_items"
 [rendering]
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
+textures/default_filters/use_nearest_mipmap_filter=false
 
 [gui]
 theme/default_font_multichannel_signed_distance_field=true
