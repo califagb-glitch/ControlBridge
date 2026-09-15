@@ -1,48 +1,58 @@
 # ControlBridge 🎮📱📺
 
-O ControlBridge transforma o **celular em um gamepad Bluetooth real**.
+O ControlBridge agora segue uma arquitetura inspirada no conceito de **Phone Controller** do Amazon Luna: o celular é o controlador e transporta os eventos pela rede local para um receptor compatível. O telefone **não tenta se passar por um gamepad Bluetooth da TV**.
 
-Fluxo:
+## Arquitetura atual
 
-**manete Bluetooth → celular → Bluetooth HID → TV → jogo**
+**manete Bluetooth → Android → ControlBridge → Wi‑Fi/LAN → receptor no navegador da TV**
 
-A TV não precisa instalar o APK do ControlBridge. O celular anuncia um perfil HID de gamepad e a TV o enxerga como uma manete Bluetooth comum. O app usa `BluetoothHidDevice` (Android 9/API 28+) e envia relatórios HID com dois analógicos, gatilhos, D-pad e até 16 botões.
+A primeira versão usava `BluetoothHidDevice` + `AccessibilityService`. Isso foi removido porque exigia permissões especiais, podia atrapalhar o pareamento da manete e não era a melhor solução para o objetivo do projeto.
+
+O Android já expõe eventos de gamepad (`KeyEvent` e `MotionEvent`) para aplicativos compatíveis com controles. O ControlBridge captura esses eventos enquanto sua tela está em primeiro plano e os envia pelo LAN. citehttps://developer.android.com/games/sdk/game-controller/compatibility?hl=pt-BR
 
 ## Como usar
 
-1. Instale o APK `mobile` no celular.
-2. Ligue o Bluetooth e dê a permissão de **Dispositivos próximos**.
-3. Abra o ControlBridge e deixe a tela aberta durante o primeiro pareamento.
-4. Ative o serviço de acessibilidade do ControlBridge em **Configurações → Acessibilidade**. Ele captura os eventos da manete globalmente.
-5. Na TV, abra as configurações de Bluetooth e procure **ControlBridge Gamepad**.
-6. Pareie a TV com o ControlBridge.
-7. Volte ao app, toque em **Atualizar dispositivos pareados**, selecione a TV e toque em **Conectar como gamepad**.
-8. Deixe a notificação do ControlBridge ativa. Agora os botões e analógicos da manete conectada ao celular são enviados para a TV como entrada de controle.
+1. Pareie a manete com o celular normalmente nas configurações Bluetooth do Android.
+2. Abra o ControlBridge. **Nenhuma permissão Bluetooth especial é solicitada pelo app.**
+3. Mantenha o ControlBridge aberto para que ele receba os eventos do controle.
+4. O app mostra o endereço local, por exemplo `http://192.168.1.20:8080`.
+5. Na TV Samsung, abra o navegador e digite esse endereço.
+6. A página **ControlBridge TV Receiver** abre e conecta automaticamente ao WebSocket do celular.
+7. Pressione botões ou mova os analógicos: o receptor mostra os eventos recebidos.
 
-## Importante para o pareamento
+## Importante sobre a TV Samsung/Tizen
 
-O registro HID precisa estar ativo **antes** do pareamento, porque a TV pode armazenar em cache o perfil HID. Se a TV já tinha pareado o celular como um telefone Bluetooth, remova esse pareamento dos dois lados e faça novamente procurando o nome **ControlBridge Gamepad**.
+O receptor web é uma camada de comunicação/teste. Ele **não consegue injetar comandos em qualquer aplicativo nativo da Samsung TV**. Uma página web não pode transformar arbitrariamente eventos WebSocket em entrada nativa de um jogo externo.
 
-## Compatibilidade
+Portanto, para controlar um jogo específico na TV, esse jogo precisa oferecer uma integração compatível com o protocolo do ControlBridge, ou o jogo precisa estar rodando no próprio navegador/receptor. Não prometemos uma injeção universal de controles no Tizen.
 
-O recurso principal depende de o firmware do celular oferecer o perfil **Bluetooth HID Device**. A API pública existe desde o Android 9, mas alguns fabricantes podem não expor o perfil no aparelho. O app detecta essa situação e informa que o HID não está disponível.
+## Filosofia do projeto
 
-A captura global da manete usa `AccessibilityService` para receber eventos de gamepad mesmo fora da tela do ControlBridge. Os eventos são convertidos para o relatório HID e enviados diretamente para a TV, sem UDP e sem depender de um aplicativo receptor na TV.
+Queremos reproduzir as partes úteis do conceito Luna Phone Controller:
 
-## TV Samsung
+- celular como controle;
+- conexão por rede local;
+- baixa latência;
+- descoberta simples;
+- interface de controle moderna;
+- sem APK Android instalado na Samsung TV;
+- sem AccessibilityService;
+- sem Bluetooth HID Device;
+- sem permissões de `BLUETOOTH_ADVERTISE`/`BLUETOOTH_CONNECT`/`BLUETOOTH_SCAN` no aplicativo.
 
-Este desenho é especialmente importante para TVs Samsung/Tizen: não tentamos instalar um APK Android na TV. A TV recebe o ControlBridge através do Bluetooth como um gamepad. As TVs Samsung possuem suporte a gamepads Bluetooth/USB, embora a compatibilidade do jogo específico dependa do próprio jogo.
+O próprio Luna demonstra o conceito de smartphone como controle para experiências voltadas à TV, inclusive com entrada de jogadores por QR code em experiências GameNight. citehttps://aws.amazon.com/pt/solutions/amazon/one-amazon-lane/streaming/
 
-## Estrutura
+## Interface
 
-- `mobile`: aplicativo principal, Bluetooth HID, captura global e interface de pareamento.
-- `tv`: módulo Android TV mantido para testes/protótipos antigos; **não é necessário para o modo HID**.
+O HUD foi redesenhado para parecer um produto de gaming: status da manete, endereço do receptor, área de controle virtual e animações simples, mantendo o foco em baixa latência.
+
+## Imagem solicitada
+
+A imagem enviada anteriormente por URL não pôde ser recuperada do servidor neste ambiente. Ela não foi falsamente incorporada ao projeto. Se a imagem for anexada diretamente à conversa, ela poderá ser usada como asset do HUD.
 
 ## Limitações reais
 
-- O celular precisa suportar `BluetoothHidDevice`.
-- O Bluetooth precisa permanecer ligado.
-- A manete precisa ser reconhecida pelo Android como gamepad.
-- O app precisa permanecer autorizado como serviço de acessibilidade para a captura global.
-- O jogo da TV precisa aceitar gamepad.
-- Vibração, touchpad e giroscópio ainda não são encaminhados neste primeiro modo HID.
+- O Android normalmente entrega eventos do controle ao app que está em primeiro plano; não prometemos captura global sem privilégios.
+- O receptor web recebe e visualiza os eventos, mas não pode injetá-los universalmente em jogos nativos da TV.
+- O telefone e a TV precisam estar na mesma rede local para a conexão direta.
+- O desempenho depende da rede; 5 GHz é recomendado quando disponível.
