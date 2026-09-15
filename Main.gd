@@ -1,262 +1,425 @@
 extends Node2D
 
+# DEEPCORE - Professional Incremental Mining Prototype
+# Inspired by Keep on Mining!
+
+const SCREEN_W := 1280.0
+const SCREEN_H := 720.0
+
+# ------------------ BALANCE ------------------
+var base_mine_power := 8.0
+var mine_power_mult := 1.0
+var area_radius := 95.0
+var pickaxe_speed := 420.0
+var rock_spawn_rate := 0.55
+var max_rocks := 14
+var ore_to_bar_ratio := 3.0
+
+# ------------------ STATE ------------------
+var bars := 0.0
 var ore := 0.0
-var credits := 25.0
-var depth := 12
-var pickaxe_level := 1
-var drill_level := 0
-var mine_power := 1.0
-var ore_value := 2.0
-var mining_cooldown := 0.0
-var message := "A mina está esperando."
-var message_time := 0.0
-var hit_flash := 0.0
-var camera_shake := 0.0
+var xp := 0.0
+var level := 1
+var xp_to_next := 40.0
+
+var mining_power_level := 0
+var area_level := 0
+var speed_level := 0
+var value_level := 0
+
+var message := "Passe o mouse sobre as rochas para minerar"
+var message_timer := 3.5
+var shake := 0.0
 var pulse := 0.0
-var mine_anim := 0.0
-var drill_anim := 0.0
-var button_flash := 0.0
+
+var mouse_pos := Vector2(SCREEN_W * 0.5, SCREEN_H * 0.45)
 var hover_button := -1
+
+# Collections
+var rocks: Array[Dictionary] = []
+var pickaxes: Array[Dictionary] = []
 var particles: Array[Dictionary] = []
-var ore_chunks: Array[Dictionary] = []
+var float_texts: Array[Dictionary] = []
 var dust: Array[Dictionary] = []
+
+# Spawn control
+var spawn_timer := 0.0
 
 func _ready() -> void:
     randomize()
-    for i in range(42):
+    for i in range(50):
         dust.append({
-            "pos": Vector2(randf_range(90.0, 800.0), randf_range(215.0, 520.0)),
-            "speed": randf_range(5.0, 18.0),
-            "size": randf_range(1.0, 2.5),
+            "pos": Vector2(randf_range(80, 900), randf_range(180, 540)),
+            "speed": randf_range(6.0, 16.0),
+            "size": randf_range(1.0, 2.4),
             "phase": randf_range(0.0, TAU)
         })
+    _spawn_initial_rocks()
     queue_redraw()
+
+func _spawn_initial_rocks() -> void:
+    for i in range(8):
+        _spawn_rock()
 
 func _process(delta: float) -> void:
-    mining_cooldown = maxf(0.0, mining_cooldown - delta)
-    message_time = maxf(0.0, message_time - delta)
-    hit_flash = maxf(0.0, hit_flash - delta * 4.0)
-    camera_shake = maxf(0.0, camera_shake - delta * 7.0)
-    button_flash = maxf(0.0, button_flash - delta * 5.0)
     pulse += delta
-    mine_anim = maxf(0.0, mine_anim - delta * 5.5)
-    drill_anim += delta * (2.0 + drill_level * 0.55)
-    if drill_level > 0:
-        ore += (0.35 * drill_level) * delta
-    for d: Dictionary in dust:
-        d["pos"].y -= d["speed"] * delta
-        d["pos"].x += sin(pulse * 0.7 + d["phase"]) * delta * 4.0
-        if d["pos"].y < 210.0:
-            d["pos"].y = 515.0
-            d["pos"].x = randf_range(90.0, 800.0)
-    for p: Dictionary in particles:
-        p["pos"] = p["pos"] + p["vel"] * delta
-        p["vel"].y += 260.0 * delta
-        p["life"] -= delta
-    particles = particles.filter(func(p: Dictionary): return p["life"] > 0.0)
-    for c: Dictionary in ore_chunks:
-        c["pos"] = c["pos"] + c["vel"] * delta
-        c["vel"].y += 180.0 * delta
-        c["life"] -= delta
-    ore_chunks = ore_chunks.filter(func(c: Dictionary): return c["life"] > 0.0)
+    message_timer = maxf(0.0, message_timer - delta)
+    shake = maxf(0.0, shake - delta * 9.0)
+
+    var mp := get_viewport().get_mouse_position()
+    if mp.x > 0 and mp.y > 0:
+        mouse_pos = mp
+
+    # Auto convert ore -> bars
+    if ore >= ore_to_bar_ratio:
+        var convert := floorf(ore / ore_to_bar_ratio)
+        ore -= convert * ore_to_bar_ratio
+        bars += convert
+
+    # Spawn rocks
+    spawn_timer -= delta
+    if spawn_timer <= 0.0 and rocks.size() < max_rocks:
+        _spawn_rock()
+        spawn_timer = rock_spawn_rate * randf_range(0.7, 1.3)
+
+    _update_rocks(delta)
+    _update_pickaxes(delta)
+    _update_particles(delta)
+    _update_float_texts(delta)
+    _update_dust(delta)
+    _try_mine()
+
     queue_redraw()
 
+func _update_dust(delta: float) -> void:
+    for d in dust:
+        d["pos"].y -= d["speed"] * delta
+        d["pos"].x += sin(pulse * 0.8 + d["phase"]) * delta * 5.0
+        if d["pos"].y < 170.0:
+            d["pos"].y = 530.0
+            d["pos"].x = randf_range(90, 880)
+
+func _spawn_rock() -> void:
+    var types := [
+        {"name": "comum", "hp": 18.0, "max_hp": 18.0, "ore": 1.0, "color": Color("#8a9ba3"), "radius": 22.0, "weight": 60},
+        {"name": "densa", "hp": 42.0, "max_hp": 42.0, "ore": 3.0, "color": Color("#6b8f9c"), "radius": 28.0, "weight": 28},
+        {"name": "rica", "hp": 75.0, "max_hp": 75.0, "ore": 7.0, "color": Color("#c4a35a"), "radius": 32.0, "weight": 12},
+    ]
+
+    var total_w := 0
+    for t in types:
+        total_w += t["weight"]
+    var r := randi() % total_w
+    var chosen: Dictionary
+    for t in types:
+        r -= t["weight"]
+        if r < 0:
+            chosen = t.duplicate()
+            break
+
+    var scale := 1.0 + (level - 1) * 0.08
+    chosen["hp"] *= scale
+    chosen["max_hp"] = chosen["hp"]
+
+    var pos := Vector2(
+        randf_range(160.0, 780.0),
+        randf_range(230.0, 480.0)
+    )
+
+    rocks.append({
+        "pos": pos,
+        "hp": chosen["hp"],
+        "max_hp": chosen["max_hp"],
+        "ore": chosen["ore"],
+        "color": chosen["color"],
+        "radius": chosen["radius"],
+        "name": chosen["name"],
+        "hit_flash": 0.0,
+        "spawn_t": 0.0
+    })
+
+func _try_mine() -> void:
+    var area := area_radius * (1.0 + area_level * 0.12)
+
+    for rock in rocks:
+        var dist := mouse_pos.distance_to(rock["pos"])
+        if dist < area + rock["radius"] * 0.6:
+            if randf() < 0.18 + speed_level * 0.03:
+                _spawn_pickaxe(rock)
+
+func _spawn_pickaxe(target: Dictionary) -> void:
+    var angle := randf_range(0.0, TAU)
+    var offset := Vector2(cos(angle), sin(angle)) * randf_range(30.0, 70.0)
+    pickaxes.append({
+        "pos": mouse_pos + offset,
+        "target": target,
+        "speed": pickaxe_speed * (1.0 + speed_level * 0.08),
+        "life": 1.4,
+        "damage": base_mine_power * mine_power_mult * (1.0 + mining_power_level * 0.35) * randf_range(0.85, 1.15),
+        "angle": angle,
+        "spin": randf_range(-12.0, 12.0)
+    })
+
+func _update_rocks(delta: float) -> void:
+    for rock in rocks:
+        rock["spawn_t"] = minf(1.0, rock["spawn_t"] + delta * 4.0)
+        rock["hit_flash"] = maxf(0.0, rock["hit_flash"] - delta * 6.0)
+
+func _update_pickaxes(delta: float) -> void:
+    var to_remove: Array[int] = []
+    for i in range(pickaxes.size()):
+        var p: Dictionary = pickaxes[i]
+        p["life"] -= delta
+        p["angle"] += p["spin"] * delta
+
+        var target_pos: Vector2 = p["target"]["pos"] if p["target"] is Dictionary else mouse_pos
+        var dir := (target_pos - p["pos"]).normalized()
+        p["pos"] += dir * p["speed"] * delta
+
+        if p["pos"].distance_to(target_pos) < 18.0:
+            _damage_rock(p["target"], p["damage"])
+            _spawn_hit_particles(p["pos"])
+            to_remove.append(i)
+        elif p["life"] <= 0.0:
+            to_remove.append(i)
+
+    for i in range(to_remove.size() - 1, -1, -1):
+        pickaxes.remove_at(to_remove[i])
+
+func _damage_rock(rock: Dictionary, dmg: float) -> void:
+    if not rocks.has(rock):
+        return
+    rock["hp"] -= dmg
+    rock["hit_flash"] = 1.0
+    shake = maxf(shake, 0.35)
+
+    _spawn_float_text(rock["pos"] + Vector2(0, -20), "-%.0f" % dmg, Color("#e8d48b"))
+
+    if rock["hp"] <= 0.0:
+        _break_rock(rock)
+
+func _break_rock(rock: Dictionary) -> void:
+    var gained_ore := rock["ore"] * (1.0 + value_level * 0.25)
+    ore += gained_ore
+    xp += gained_ore * 2.8
+
+    _spawn_break_particles(rock["pos"], rock["color"])
+    _spawn_float_text(rock["pos"], "+%.1f ore" % gained_ore, Color("#7dcea0"))
+    shake = 0.7
+
+    rocks.erase(rock)
+
+    while xp >= xp_to_next:
+        xp -= xp_to_next
+        level += 1
+        xp_to_next = 40.0 + level * 18.0
+        message = "LEVEL UP! Você alcançou o nível %d" % level
+        message_timer = 2.8
+        bars += level * 2
+
+func _update_particles(delta: float) -> void:
+    for p in particles:
+        p["pos"] += p["vel"] * delta
+        p["vel"].y += 280.0 * delta
+        p["life"] -= delta
+    particles = particles.filter(func(p: Dictionary): return p["life"] > 0.0)
+
+func _update_float_texts(delta: float) -> void:
+    for t in float_texts:
+        t["pos"].y -= 38.0 * delta
+        t["life"] -= delta
+    float_texts = float_texts.filter(func(t: Dictionary): return t["life"] > 0.0)
+
+func _spawn_hit_particles(pos: Vector2) -> void:
+    for i in range(6):
+        var a := randf() * TAU
+        particles.append({
+            "pos": pos,
+            "vel": Vector2(cos(a), sin(a)) * randf_range(60, 160),
+            "life": randf_range(0.2, 0.45),
+            "size": randf_range(1.5, 3.0),
+            "color": Color("#d4b56a")
+        })
+
+func _spawn_break_particles(pos: Vector2, col: Color) -> void:
+    for i in range(18):
+        var a := randf() * TAU
+        particles.append({
+            "pos": pos,
+            "vel": Vector2(cos(a), sin(a)) * randf_range(90, 260),
+            "life": randf_range(0.35, 0.8),
+            "size": randf_range(2.0, 5.0),
+            "color": col
+        })
+
+func _spawn_float_text(pos: Vector2, text: String, col: Color) -> void:
+    float_texts.append({
+        "pos": pos,
+        "text": text,
+        "life": 0.9,
+        "color": col
+    })
+
+# ------------------ INPUT ------------------
 func _unhandled_input(event: InputEvent) -> void:
     if event is InputEventMouseMotion:
         hover_button = _button_at(event.position)
-    elif event is InputEventKey and event.pressed and not event.echo:
-        if event.keycode == KEY_SPACE: mine()
-        elif event.keycode == KEY_S: sell()
-        elif event.keycode == KEY_1: upgrade_pickaxe()
-        elif event.keycode == KEY_2: upgrade_drill()
     elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-        var p: Vector2 = event.position
-        var b := _button_at(p)
-        if b == 0: mine()
-        elif b == 1: sell()
-        elif b == 2: upgrade_pickaxe()
-        elif b == 3: upgrade_drill()
+        var b := _button_at(event.position)
+        match b:
+            0: _buy_power()
+            1: _buy_area()
+            2: _buy_speed()
+            3: _buy_value()
 
 func _button_at(p: Vector2) -> int:
-    if Rect2(64, 574, 250, 78).has_point(p): return 0
-    if Rect2(338, 574, 190, 78).has_point(p): return 1
-    if Rect2(560, 574, 190, 78).has_point(p): return 2
-    if Rect2(782, 574, 190, 78).has_point(p): return 3
+    if Rect2(40, 600, 220, 72).has_point(p): return 0
+    if Rect2(280, 600, 220, 72).has_point(p): return 1
+    if Rect2(520, 600, 220, 72).has_point(p): return 2
+    if Rect2(760, 600, 220, 72).has_point(p): return 3
     return -1
 
-func mine() -> void:
-    if mining_cooldown > 0.0: return
-    mining_cooldown = 0.18
-    var amount := mine_power * (1.0 + float(pickaxe_level - 1) * 0.35)
-    ore += amount
-    depth = min(1000, depth + (1 if randf() > 0.72 else 0))
-    hit_flash = 1.0
-    camera_shake = 1.0
-    mine_anim = 1.0
-    button_flash = 1.0
-    message = "+%.1f kg minério" % amount
-    message_time = 0.9
-    var center := Vector2(438, 410)
-    for i in range(18):
-        var angle := randf_range(0.0, TAU)
-        var speed := randf_range(80.0, 230.0)
-        particles.append({"pos": center, "vel": Vector2(cos(angle), sin(angle)) * speed, "life": randf_range(0.25, 0.65), "size": randf_range(2.0, 4.0)})
-    for i in range(5):
-        ore_chunks.append({"pos": center + Vector2(randf_range(-22,22), randf_range(-12,12)), "vel": Vector2(randf_range(-100,100), randf_range(-160,-70)), "life": 0.8, "size": randf_range(3.0, 6.0)})
-
-func sell() -> void:
-    if ore <= 0.0:
-        message = "Você não tem minério para vender."
-        message_time = 1.5
+func _buy_power() -> void:
+    var cost := 12.0 * pow(1.55, mining_power_level)
+    if bars < cost:
+        message = "Faltam %.0f lingotes" % (cost - bars)
+        message_timer = 1.4
         return
-    var earned := ore * ore_value
-    credits += earned
-    ore = 0.0
-    message = "+%d créditos" % int(earned)
-    message_time = 1.2
+    bars -= cost
+    mining_power_level += 1
+    message = "Poder de mineração ↑ Nível %d" % mining_power_level
+    message_timer = 1.6
 
-func upgrade_pickaxe() -> void:
-    var cost := 35.0 * pow(1.65, pickaxe_level - 1)
-    if credits < cost:
-        message = "Faltam %d créditos." % int(cost - credits)
-        message_time = 1.2
+func _buy_area() -> void:
+    var cost := 18.0 * pow(1.6, area_level)
+    if bars < cost:
+        message = "Faltam %.0f lingotes" % (cost - bars)
+        message_timer = 1.4
         return
-    credits -= cost
-    pickaxe_level += 1
-    mine_power += 0.45
-    message = "Picareta nível %d" % pickaxe_level
-    message_time = 1.4
+    bars -= cost
+    area_level += 1
+    message = "Área de mineração ↑ Nível %d" % area_level
+    message_timer = 1.6
 
-func upgrade_drill() -> void:
-    var cost := 90.0 * pow(1.8, drill_level)
-    if credits < cost:
-        message = "Faltam %d créditos." % int(cost - credits)
-        message_time = 1.2
+func _buy_speed() -> void:
+    var cost := 15.0 * pow(1.58, speed_level)
+    if bars < cost:
+        message = "Faltam %.0f lingotes" % (cost - bars)
+        message_timer = 1.4
         return
-    credits -= cost
-    drill_level += 1
-    message = "Broca automática nível %d" % drill_level
-    message_time = 1.4
+    bars -= cost
+    speed_level += 1
+    message = "Velocidade de picaretas ↑ Nível %d" % speed_level
+    message_timer = 1.6
 
+func _buy_value() -> void:
+    var cost := 22.0 * pow(1.65, value_level)
+    if bars < cost:
+        message = "Faltam %.0f lingotes" % (cost - bars)
+        message_timer = 1.4
+        return
+    bars -= cost
+    value_level += 1
+    message = "Valor do minério ↑ Nível %d" % value_level
+    message_timer = 1.6
+
+# ------------------ DRAW ------------------
 func _draw() -> void:
-    var shake := Vector2.ZERO
-    if camera_shake > 0.0:
-        shake = Vector2(randf_range(-1.8,1.8), randf_range(-1.8,1.8)) * camera_shake
-    draw_rect(Rect2(0,0,1280,720), Color("#070d12"))
-    draw_rect(Rect2(0,0,1280,86), Color("#0b171e"))
-    draw_rect(Rect2(0,84,1280,2), Color("#203a44"))
-    draw_string(ThemeDB.fallback_font, Vector2(52,48), "DEEPCORE", HORIZONTAL_ALIGNMENT_LEFT, -1, 30, Color("#edf4f5"))
-    draw_string(ThemeDB.fallback_font, Vector2(245,46), "MINING PROTOCOL / ALPHA", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("#718890"))
-    draw_string(ThemeDB.fallback_font, Vector2(1060,43), "%04d C" % int(credits), HORIZONTAL_ALIGNMENT_RIGHT, 170, 21, Color("#e6c36a"))
-    draw_circle(Vector2(1240,38), 6.0 + sin(pulse*3.0)*1.5, Color("#58b69e"))
-    draw_string(ThemeDB.fallback_font, Vector2(1060,62), "SISTEMA ONLINE", HORIZONTAL_ALIGNMENT_RIGHT, 170, 10, Color("#4c8f7e"))
+    var sh := Vector2.ZERO
+    if shake > 0.0:
+        sh = Vector2(randf_range(-2.5, 2.5), randf_range(-2.5, 2.5)) * shake
 
-    draw_style_box(_box(Color("#0d1a21"), Color("#1b343e")), Rect2(52,112,780,430))
-    draw_string(ThemeDB.fallback_font, Vector2(82,150), "MINA / SETOR %02d" % int(depth / 100 + 1), HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("#83a2aa"))
-    draw_string(ThemeDB.fallback_font, Vector2(82,188), "PROFUNDIDADE  %03d m" % depth, HORIZONTAL_ALIGNMENT_LEFT, -1, 26, Color("#dce7e9"))
-    draw_string(ThemeDB.fallback_font, Vector2(638,184), "%d%%" % int(clampf(float(depth) / 10.0, 0.0, 100.0)), HORIZONTAL_ALIGNMENT_RIGHT, 160, 13, Color("#708890"))
-    draw_rect(Rect2(638,192,160,4), Color("#172b33"))
-    draw_rect(Rect2(638,192,160 * clampf(float(depth) / 1000.0,0.0,1.0),4), Color("#c48b43"))
+    draw_rect(Rect2(0, 0, SCREEN_W, SCREEN_H), Color("#071015"))
+    draw_rect(Rect2(0, 0, SCREEN_W, 78), Color("#0b161c"))
+    draw_rect(Rect2(0, 76, SCREEN_W, 2), Color("#1e353f"))
+    draw_string(ThemeDB.fallback_font, Vector2(42, 42), "DEEPCORE", HORIZONTAL_ALIGNMENT_LEFT, -1, 28, Color("#e8f0f2"))
+    draw_string(ThemeDB.fallback_font, Vector2(210, 40), "MINING PROTOCOL  //  PROTOTYPE", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#5f7a84"))
 
-    var cave := PackedVector2Array([Vector2(84,235),Vector2(155,205),Vector2(245,228),Vector2(340,194),Vector2(452,230),Vector2(570,198),Vector2(700,236),Vector2(798,212),Vector2(798,515),Vector2(84,515)])
-    draw_colored_polygon(cave, Color("#15272e"))
-    draw_line(Vector2(84,515), Vector2(798,515), Color("#2a444d"), 2.0)
-    for i in range(12):
-        var x := 112.0 + i * 59.0
-        var y := 275.0 + float((i * 47) % 155)
-        var r := 4.0 + float(i%3)*2.0 + sin(pulse*2.0+i)*0.7
-        draw_circle(Vector2(x,y), r+5.0, Color(0.76,0.53,0.24,0.06))
-        draw_circle(Vector2(x,y), r, Color("#c48b43"))
-    for d: Dictionary in dust:
-        var dp: Vector2 = d["pos"]
-        draw_circle(dp, d["size"], Color(0.56,0.66,0.68,0.16))
+    draw_string(ThemeDB.fallback_font, Vector2(980, 32), "LINGOTES", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("#6a838c"))
+    draw_string(ThemeDB.fallback_font, Vector2(980, 54), "%.0f" % bars, HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Color("#e6c36a"))
+    draw_string(ThemeDB.fallback_font, Vector2(1120, 32), "NÍVEL %d" % level, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("#6a838c"))
+    draw_string(ThemeDB.fallback_font, Vector2(1120, 54), "%.0f / %.0f XP" % [xp, xp_to_next], HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("#9ab8c0"))
 
-    var center := Vector2(438,410) + shake
-    var pulse_radius := 48.0 + sin(pulse * 3.0) * 4.0
-    draw_circle(center, pulse_radius + hit_flash * 18.0, Color(0.77,0.55,0.25,0.06))
-    draw_circle(center, 43.0, Color("#0a1419"))
-    draw_circle(center, 37.0, Color("#1c3038"))
-    draw_arc(center, pulse_radius, 0.0, TAU, 48, Color(0.77,0.55,0.25,0.25), 2.0)
-    draw_arc(center, 52.0, -1.4, -0.4 + pulse * 0.15, 20, Color("#c48b43"), 2.0)
-    draw_string(ThemeDB.fallback_font, center + Vector2(-28,5), "VEIO", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#9ab0b6"))
+    draw_style_box(_make_box(Color("#0c171d"), Color("#1a303a")), Rect2(40, 100, 900, 470))
 
-    # Animated mining tool
-    var swing := 0.0
-    if mine_anim > 0.0:
-        swing = sin((1.0 - mine_anim) * PI) * 1.0
-    var tool_origin := center + Vector2(58, -62)
-    var tool_angle := -0.95 + swing * 1.7
-    var tool_end := tool_origin + Vector2(cos(tool_angle), sin(tool_angle)) * 92.0
-    draw_line(tool_origin, tool_end, Color("#7b5a3c"), 10.0)
-    draw_line(tool_origin, tool_end, Color("#b88451"), 5.0)
-    var head := tool_end
-    draw_line(head + Vector2(-20,-8), head + Vector2(20,8), Color("#9aa7a9"), 8.0)
-    draw_line(head + Vector2(-18,-10), head + Vector2(22,6), Color("#d1d7d6"), 3.0)
+    for d in dust:
+        draw_circle(d["pos"] + sh, d["size"], Color(0.45, 0.55, 0.58, 0.18))
 
-    # Automated drill rig
-    var rig := Vector2(700,445)
-    draw_rect(Rect2(rig.x-48,rig.y-55,96,70), Color("#0a1419"), true)
-    draw_rect(Rect2(rig.x-43,rig.y-50,86,60), Color("#1c3038"), true)
-    draw_rect(Rect2(rig.x-35,rig.y-39,70,8), Color("#29434c"), true)
-    draw_circle(rig, 25.0, Color("#101e24"))
-    draw_arc(rig, 25.0, 0.0, TAU, 32, Color("#48636b"), 4.0)
-    if drill_level > 0:
-        for i in range(4):
-            var a := drill_anim * 3.0 + i * TAU/4.0
-            var p1 := rig + Vector2(cos(a),sin(a))*8.0
-            var p2 := rig + Vector2(cos(a),sin(a))*21.0
-            draw_line(p1,p2,Color("#d2a04f"),4.0)
-        draw_string(ThemeDB.fallback_font, rig + Vector2(-44,40), "AUTO DRILL", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("#6faaa0"))
-    else:
-        draw_string(ThemeDB.fallback_font, rig + Vector2(-45,40), "OFFLINE", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("#6c777b"))
+    for rock in rocks:
+        var t: float = rock["spawn_t"]
+        var r: float = rock["radius"] * t
+        var pos: Vector2 = rock["pos"] + sh
+        var flash: float = rock["hit_flash"]
 
-    for p: Dictionary in particles:
-        draw_circle(p["pos"] + shake, p["size"], Color("#d0a45b"))
-    for c: Dictionary in ore_chunks:
-        draw_circle(c["pos"] + shake, c["size"], Color("#e5bd6e"))
+        draw_circle(pos, r + 8.0, Color(rock["color"].r, rock["color"].g, rock["color"].b, 0.08 + flash * 0.12))
+        var body_col := rock["color"].lightened(flash * 0.35)
+        draw_circle(pos, r, body_col)
+        draw_circle(pos, r * 0.72, body_col.darkened(0.25))
+        var hp_ratio := clampf(rock["hp"] / rock["max_hp"], 0.0, 1.0)
+        draw_rect(Rect2(pos.x - 18, pos.y + r + 6, 36, 4), Color("#1a2a31"))
+        draw_rect(Rect2(pos.x - 18, pos.y + r + 6, 36 * hp_ratio, 4), Color("#c48b43"))
 
-    draw_string(ThemeDB.fallback_font, Vector2(84,534), "MINÉRIO", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#718890"))
-    draw_string(ThemeDB.fallback_font, Vector2(170,534), "%.1f kg" % ore, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color("#edf4f5"))
+    var area := area_radius * (1.0 + area_level * 0.12)
+    draw_arc(mouse_pos + sh, area, 0.0, TAU, 64, Color(0.35, 0.75, 0.7, 0.25), 2.5)
+    draw_circle(mouse_pos + sh, area, Color(0.2, 0.55, 0.52, 0.06))
+    draw_circle(mouse_pos + sh, 6.0 + sin(pulse * 4.0) * 1.5, Color("#5ecfba"))
 
-    draw_style_box(_box(Color("#0d1a21"), Color("#1b343e")), Rect2(858,112,370,430))
-    draw_string(ThemeDB.fallback_font, Vector2(890,150), "OPERAÇÃO", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("#83a2aa"))
-    _card(Vector2(890,178), "PICARETA", "Nível %d" % pickaxe_level, "+%.2f força" % mine_power)
-    _card(Vector2(890,270), "BROCA", "Nível %d" % drill_level, "%.2f kg/s" % (0.35 * drill_level))
-    _card(Vector2(890,362), "VALOR", "%.0f C / kg" % ore_value, "mercado local")
-    draw_string(ThemeDB.fallback_font, Vector2(890,472), "[SPACE] minerar   [S] vender", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("#6e858d"))
-    draw_string(ThemeDB.fallback_font, Vector2(890,496), "[1] picareta    [2] broca", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("#6e858d"))
+    for p in pickaxes:
+        var pos: Vector2 = p["pos"] + sh
+        var ang: float = p["angle"]
+        var tip := pos + Vector2(cos(ang), sin(ang)) * 14.0
+        var back := pos - Vector2(cos(ang), sin(ang)) * 10.0
+        draw_line(back, tip, Color("#b8894f"), 4.0)
+        draw_line(back, tip, Color("#e8c98a"), 1.8)
+        draw_circle(tip, 3.2, Color("#d0d6d4"))
 
-    _button(Rect2(64,574,250,78), "MINERAR", "SPACE", Color("#c48b43"), 0)
-    _button(Rect2(338,574,190,78), "VENDER", "S", Color("#5f9c91"), 1)
-    _button(Rect2(560,574,190,78), "PICARETA", "1", Color("#788e98"), 2)
-    _button(Rect2(782,574,190,78), "BROCA", "2", Color("#788e98"), 3)
-    _button(Rect2(1004,574,210,78), "PRÓXIMA FASE", "BLOQUEADO", Color("#334a54"), 4)
-    if message_time > 0.0:
-        draw_string(ThemeDB.fallback_font, Vector2(64,690), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("#e6c36a"))
+    for p in particles:
+        draw_circle(p["pos"] + sh, p["size"], p["color"])
 
-func _box(bg: Color, border: Color) -> StyleBoxFlat:
+    for t in float_texts:
+        var a := clampf(t["life"] * 1.4, 0.0, 1.0)
+        var col: Color = t["color"]
+        col.a = a
+        draw_string(ThemeDB.fallback_font, t["pos"] + sh, t["text"], HORIZONTAL_ALIGNMENT_LEFT, -1, 14, col)
+
+    draw_style_box(_make_box(Color("#0c171d"), Color("#1a303a")), Rect2(960, 100, 280, 470))
+    draw_string(ThemeDB.fallback_font, Vector2(985, 135), "MELHORIAS", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("#8aa3ac"))
+
+    _draw_upgrade_card(Vector2(980, 160), "PODER", mining_power_level, "Dano das picaretas")
+    _draw_upgrade_card(Vector2(980, 250), "ÁREA", area_level, "Tamanho da zona")
+    _draw_upgrade_card(Vector2(980, 340), "VELOCIDADE", speed_level, "Mais picaretas")
+    _draw_upgrade_card(Vector2(980, 430), "VALOR", value_level, "Minério por rocha")
+
+    _draw_button(Rect2(40, 600, 220, 72), "PODER", "%.0f lingotes" % (12.0 * pow(1.55, mining_power_level)), 0)
+    _draw_button(Rect2(280, 600, 220, 72), "ÁREA", "%.0f lingotes" % (18.0 * pow(1.6, area_level)), 1)
+    _draw_button(Rect2(520, 600, 220, 72), "VELOCIDADE", "%.0f lingotes" % (15.0 * pow(1.58, speed_level)), 2)
+    _draw_button(Rect2(760, 600, 220, 72), "VALOR", "%.0f lingotes" % (22.0 * pow(1.65, value_level)), 3)
+
+    if message_timer > 0.0:
+        draw_string(ThemeDB.fallback_font, Vector2(40, 690), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color("#e6c36a"))
+
+    draw_string(ThemeDB.fallback_font, Vector2(1000, 690), "Passe o mouse nas rochas", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("#4d676f"))
+
+func _draw_upgrade_card(pos: Vector2, title: String, lvl: int, desc: String) -> void:
+    draw_style_box(_make_box(Color("#0a1419"), Color("#1c323c")), Rect2(pos.x, pos.y, 240, 78))
+    draw_string(ThemeDB.fallback_font, pos + Vector2(14, 24), title, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#7a939c"))
+    draw_string(ThemeDB.fallback_font, pos + Vector2(14, 48), "Nível %d" % lvl, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color("#e4eef0"))
+    draw_string(ThemeDB.fallback_font, pos + Vector2(120, 48), desc, HORIZONTAL_ALIGNMENT_LEFT, 110, 11, Color("#6f8a93"))
+
+func _draw_button(rect: Rect2, title: String, cost: String, index: int) -> void:
+    var hovered := hover_button == index
+    var bg := Color("#1a3038") if hovered else Color("#13242c")
+    var border := Color("#3d6a6a") if hovered else Color("#243c46")
+    draw_style_box(_make_box(bg, border), rect)
+    if hovered:
+        draw_rect(Rect2(rect.position + Vector2(6, 5), Vector2(rect.size.x - 12, 2)), Color("#5ecfba"))
+    draw_string(ThemeDB.fallback_font, rect.position + Vector2(16, 28), title, HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color("#e8f0f2"))
+    draw_string(ThemeDB.fallback_font, rect.position + Vector2(16, 52), cost, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("#8eb8b0"))
+
+func _make_box(bg: Color, border: Color) -> StyleBoxFlat:
     var b := StyleBoxFlat.new()
     b.bg_color = bg
     b.border_color = border
     b.set_border_width_all(1)
     b.set_corner_radius_all(8)
     return b
-
-func _card(pos: Vector2, title: String, value: String, sub: String) -> void:
-    draw_style_box(_box(Color("#0a151b"), Color("#1b333e")), Rect2(pos.x,pos.y,306,78))
-    draw_string(ThemeDB.fallback_font, pos + Vector2(16,24), title, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("#6f858d"))
-    draw_string(ThemeDB.fallback_font, pos + Vector2(16,50), value, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color("#e5edef"))
-    draw_string(ThemeDB.fallback_font, pos + Vector2(180,50), sub, HORIZONTAL_ALIGNMENT_LEFT, 110, 12, Color("#83a2aa"))
-
-func _button(rect: Rect2, title: String, key: String, accent: Color, index: int) -> void:
-    var hovered := hover_button == index
-    var pressed := button_flash > 0.0 and index == 0
-    var bg := Color("#182c35") if hovered else Color("#12232b")
-    if pressed:
-        bg = Color("#29434a")
-    var border := accent if hovered else Color("#29424c")
-    draw_style_box(_box(bg, border), rect)
-    if hovered:
-        draw_rect(Rect2(rect.position + Vector2(8,7), Vector2(rect.size.x-16,2)), accent)
-    draw_string(ThemeDB.fallback_font, rect.position + Vector2(18,30), title, HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color("#e5edef"))
-    draw_string(ThemeDB.fallback_font, rect.position + Vector2(18,55), key, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, accent)
