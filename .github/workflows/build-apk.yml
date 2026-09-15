@@ -1,4 +1,4 @@
-name: Build ControlBridge APKs
+name: Build ControlBridge APK
 
 on:
   push:
@@ -24,14 +24,12 @@ jobs:
         with:
           gradle-version: "8.9"
 
-      - name: Compilar Mobile e TV
-        run: gradle :mobile:assembleDebug :tv:assembleDebug --no-daemon
+      - name: Compilar Mobile
+        run: gradle :mobile:assembleDebug --no-daemon
 
-      - name: Salvar APKs
+      - name: Salvar APK
         uses: actions/upload-artifact@v4
         with:
-          name: ControlBridge-APKs
-          path: |
-            mobile/build/outputs/apk/debug/*.apk
-            tv/build/outputs/apk/debug/*.apk
+          name: ControlBridge-APK
+          path: mobile/build/outputs/apk/debug/*.apk
           if-no-files-found: error
