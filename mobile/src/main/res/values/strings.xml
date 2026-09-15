@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">InputForge TV</string>
+    <string name="accessibility_description">InputForge transforma comandos do controle em navegação e ponteiro virtual na TV.</string>
+</resources>

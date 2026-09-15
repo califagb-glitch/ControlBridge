@@ -1,8 +1,9 @@
-name: Build ControlBridge
+name: Build InputForge TV
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -11,17 +12,18 @@ jobs:
         uses: actions/checkout@v4
       - name: Java 17
         uses: actions/setup-java@v4
-        with: { distribution: temurin, java-version: '17' }
+        with:
+          distribution: temurin
+          java-version: '17'
       - name: Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
-        with: { gradle-version: '8.9' }
-      - name: Build all APKs
-        run: gradle :mobile:assembleDebug :tv:assembleDebug --no-daemon
-      - name: Upload APKs
+        with:
+          gradle-version: '8.9'
+      - name: Build APK
+        run: gradle :mobile:assembleDebug --no-daemon
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ControlBridge-3.0-APKs
-          path: |
-            mobile/build/outputs/apk/debug/*.apk
-            tv/build/outputs/apk/debug/*.apk
+          name: InputForge-TV-debug
+          path: mobile/build/outputs/apk/debug/*.apk
           if-no-files-found: error

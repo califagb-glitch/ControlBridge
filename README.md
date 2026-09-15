@@ -1,90 +1,56 @@
-# ControlBridge 3.0
+# InputForge TV
 
-ControlBridge is a local controller bridge designed around one goal: **physical gamepad → Android phone → TV**. The phone is the bridge, not a gamepad tester.
+**InputForge TV** is a TV-first Android input engine: it turns ordinary remote/gamepad navigation into a configurable virtual pointer and global TV actions.
 
-> 3.0 note: this branch is a deep architectural rewrite; validate the generated APKs on the target phone/TV before treating the bridge as production-ready.
+## Why it exists
+
+Smart-TV interfaces often assume every app supports the same focus model. Many do not. InputForge adds an input layer above the UI so a D-pad can behave like a pointer instead of being trapped by focus navigation.
+
+## v0.1 capabilities
+
+- Accessibility-based input engine for Android TV.
+- Virtual pointer controlled by D-pad.
+- A / D-pad Center = click at pointer position.
+- B = Back.
+- X = Home.
+- Y = Recent Apps.
+- Adjustable pointer speed.
+- TV-first launcher UI.
+- No network bridge, cloud dependency, root or companion phone required.
 
 ## Architecture
 
 ```text
-Bluetooth gamepad
-      │
-      ▼
- Android phone / ControlBridge
-   ├─ Input capture
-   ├─ Bluetooth HID ───────────────► Android TV / compatible HID host
-   └─ WebSocket over LAN ─────────► ControlBridge TV receiver
-                                      │
-                                      └─ receiver UI / remote events
+InputForge TV
+├── MainActivity                  # TV control panel
+├── InputForgeAccessibilityService # global input interception
+│   ├── Cursor engine             # virtual pointer position
+│   ├── Gesture engine            # tap / movement injection
+│   └── Action mapper             # Back / Home / Recents
+└── Android Accessibility API     # privileged user-approved input layer
 ```
 
-The Bluetooth HID path is the path intended for games and cloud-gaming apps that accept a normal Bluetooth gamepad. Android's public `BluetoothHidDevice` API supports registering an HID application, connecting to a paired host and sending HID reports. The registration must remain foreground, so the project now keeps the bridge in a `connectedDevice` foreground service.
+## Important platform boundary
 
-The WebSocket path is a low-latency LAN control channel for the companion TV receiver. A normal Android app cannot inject arbitrary input into unrelated third-party TV applications just because it receives WebSocket packets; therefore the TV receiver intentionally exposes and visualizes the remote stream instead of pretending it can control every external app.
+InputForge intentionally uses public Android APIs. Accessibility can receive filtered key events and dispatch gestures, but it cannot magically inject arbitrary hardware-level gamepad events into every application. Analog-stick capture, raw HID rewriting and some game-specific mappings require a different system-level mechanism and are therefore separate future work.
 
-## Project structure
-
-```text
-core/
-  protocol/              # InputPacket + WebSocket framing
-mobile/
-  bridge/                # Bluetooth HID output
-  input/                 # Physical controller capture
-  network/               # LAN WebSocket server + NSD advertisement
-  service/               # Foreground bridge service
-  audio/                 # UI sound manager + fallback tones
-  ui/                    # Main dashboard / HUD / settings
-  src/main/res/          # Theme, strings and optional downloaded SFX
-tv/
-  network/               # NSD discovery + WebSocket receiver
-  ui/                    # TV receiver interface
-scripts/
-  fetch_ui_audio.sh      # Downloads the optional CC0 UI sound pack
-.github/workflows/       # Android CI / APK artifact
-```
-
-## Run
-
-1. Open the project in Android Studio with JDK 17.
-2. Sync Gradle.
-3. Build `:mobile:assembleDebug` for the phone APK.
-4. Build `:tv:assembleDebug` for the Android TV receiver.
-5. Install both apps on devices connected to the same Wi-Fi network.
-6. Pair the phone with the TV through Bluetooth if you want the HID path.
-7. Open ControlBridge on the phone and keep the bridge active. The service notification confirms the bridge is running.
-8. Open ControlBridge TV. It advertises/discovers the phone automatically through Android NSD and opens the WebSocket channel.
-
-## Themes and UI
-
-The mobile UI is deliberately a dashboard rather than a permanent controller tester. `DashboardView` contains three screens: Home, Bridge HUD and Settings. Glass panels, subtle borders, animated ambient shapes and press/focus states are drawn with one lightweight custom view to minimize view hierarchy overhead.
-
-For a future theme system, keep palette and dimensions centralized in `mobile/src/main/java/com/controlbridge/mobile/ui/`. Do not put networking or controller logic inside the drawing code.
-
-## Audio
-
-The runtime has a centralized `UiSoundManager` with four semantic events: focus, click, open and close. It falls back to Android `ToneGenerator`, so the APK remains functional without shipping external audio files.
-
-Optional CC0 WAV assets can be installed automatically:
+## Build
 
 ```bash
-bash scripts/fetch_ui_audio.sh
+gradle :mobile:assembleDebug --no-daemon
 ```
 
-The script uses the CC0 SFXMint UI set. If assets are present, the audio layer can be extended to prefer local files while retaining the tone fallback.
+The GitHub Actions workflow builds the debug APK on every push to `main`.
 
-## Performance rules
+## First launch
 
-- Controller events are emitted only when an input changes meaningfully.
-- HID reports are compact and sent without JSON serialization.
-- LAN JSON packets are small and only emitted for key/motion changes.
-- UI animation uses a single custom Canvas instead of a large nested layout.
-- Network work runs off the main thread.
-- The HID/network bridge runs in a foreground `connectedDevice` service so the user can switch to another app without intentionally stopping the bridge.
+1. Install `InputForge TV` on the Android TV.
+2. Open it.
+3. Choose **Ativar InputForge**.
+4. Enable the InputForge accessibility service.
+5. Return to the app.
+6. Leave **Modo ponteiro** enabled.
 
-## Important platform limitation
+## Project direction
 
-The network receiver and the Bluetooth HID path solve different problems. WebSocket packets can drive the **ControlBridge TV app itself**, but an ordinary Android application cannot universally inject those packets as physical gamepad events into arbitrary third-party games. For external games/cloud clients, use the Bluetooth HID connection so the TV sees the phone as a real HID gamepad.
-
-## Status
-
-This is a structural 3.0 rewrite. The next validation step is physical: install both APKs, pair the phone and Android TV, verify that the TV sees **ControlBridge Gamepad**, then test a real game/cloud client. Build success alone is not considered feature completion.
+Future modules are planned around profiles, macro composition, analog-to-pointer strategies, per-app rules, diagnostics and a polished TV-native UI. The core rule is simple: every feature must be backed by a real Android capability rather than a fake tester/demo.
