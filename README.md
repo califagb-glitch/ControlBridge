@@ -1,58 +1,88 @@
-# ControlBridge 🎮📱📺
+# ControlBridge 3.0
 
-O ControlBridge agora segue uma arquitetura inspirada no conceito de **Phone Controller** do Amazon Luna: o celular é o controlador e transporta os eventos pela rede local para um receptor compatível. O telefone **não tenta se passar por um gamepad Bluetooth da TV**.
+ControlBridge is a local controller bridge designed around one goal: **physical gamepad → Android phone → TV**. The phone is the bridge, not a gamepad tester.
 
-## Arquitetura atual
+## Architecture
 
-**manete Bluetooth → Android → ControlBridge → Wi‑Fi/LAN → receptor no navegador da TV**
+```text
+Bluetooth gamepad
+      │
+      ▼
+ Android phone / ControlBridge
+   ├─ Input capture
+   ├─ Bluetooth HID ───────────────► Android TV / compatible HID host
+   └─ WebSocket over LAN ─────────► ControlBridge TV receiver
+                                      │
+                                      └─ receiver UI / remote events
+```
 
-A primeira versão usava `BluetoothHidDevice` + `AccessibilityService`. Isso foi removido porque exigia permissões especiais, podia atrapalhar o pareamento da manete e não era a melhor solução para o objetivo do projeto.
+The Bluetooth HID path is the path intended for games and cloud-gaming apps that accept a normal Bluetooth gamepad. Android's public `BluetoothHidDevice` API supports registering an HID application, connecting to a paired host and sending HID reports. The registration must remain foreground, so the project now keeps the bridge in a `connectedDevice` foreground service. 
 
-O Android já expõe eventos de gamepad (`KeyEvent` e `MotionEvent`) para aplicativos compatíveis com controles. O ControlBridge captura esses eventos enquanto sua tela está em primeiro plano e os envia pelo LAN. citehttps://developer.android.com/games/sdk/game-controller/compatibility?hl=pt-BR
+The WebSocket path is a low-latency LAN control channel for the companion TV receiver. A normal Android app cannot inject arbitrary input into unrelated third-party TV applications just because it receives WebSocket packets; therefore the TV receiver intentionally exposes and visualizes the remote stream instead of pretending it can control every external app.
 
-## Como usar
+## Project structure
 
-1. Pareie a manete com o celular normalmente nas configurações Bluetooth do Android.
-2. Abra o ControlBridge. **Nenhuma permissão Bluetooth especial é solicitada pelo app.**
-3. Mantenha o ControlBridge aberto para que ele receba os eventos do controle.
-4. O app mostra o endereço local, por exemplo `http://192.168.1.20:8080`.
-5. Na TV Samsung, abra o navegador e digite esse endereço.
-6. A página **ControlBridge TV Receiver** abre e conecta automaticamente ao WebSocket do celular.
-7. Pressione botões ou mova os analógicos: o receptor mostra os eventos recebidos.
+```text
+core/
+  protocol/              # InputPacket + WebSocket framing
+mobile/
+  bridge/                # Bluetooth HID output
+  input/                 # Physical controller capture
+  network/               # LAN WebSocket server + NSD advertisement
+  service/               # Foreground bridge service
+  audio/                 # UI sound manager + fallback tones
+  ui/                    # Main dashboard / HUD / settings
+  src/main/res/          # Theme, strings and optional downloaded SFX
+tv/
+  network/               # NSD discovery + WebSocket receiver
+  ui/                    # TV receiver interface
+scripts/
+  fetch_ui_audio.sh      # Downloads the optional CC0 UI sound pack
+.github/workflows/       # Android CI / APK artifact
+```
 
-## Importante sobre a TV Samsung/Tizen
+## Run
 
-O receptor web é uma camada de comunicação/teste. Ele **não consegue injetar comandos em qualquer aplicativo nativo da Samsung TV**. Uma página web não pode transformar arbitrariamente eventos WebSocket em entrada nativa de um jogo externo.
+1. Open the project in Android Studio with JDK 17.
+2. Sync Gradle.
+3. Build `:mobile:assembleDebug` for the phone APK.
+4. Build `:tv:assembleDebug` for the Android TV receiver.
+5. Install both apps on devices connected to the same Wi-Fi network.
+6. Pair the phone with the TV through Bluetooth if you want the HID path.
+7. Open ControlBridge on the phone and keep the bridge active. The service notification confirms the bridge is running.
+8. Open ControlBridge TV. It advertises/discovers the phone automatically through Android NSD and opens the WebSocket channel.
 
-Portanto, para controlar um jogo específico na TV, esse jogo precisa oferecer uma integração compatível com o protocolo do ControlBridge, ou o jogo precisa estar rodando no próprio navegador/receptor. Não prometemos uma injeção universal de controles no Tizen.
+## Themes and UI
 
-## Filosofia do projeto
+The mobile UI is deliberately a dashboard rather than a permanent controller tester. `DashboardView` contains three screens: Home, Bridge HUD and Settings. Glass panels, subtle borders, animated ambient shapes and press/focus states are drawn with one lightweight custom view to minimize view hierarchy overhead.
 
-Queremos reproduzir as partes úteis do conceito Luna Phone Controller:
+For a future theme system, keep palette and dimensions centralized in `mobile/src/main/java/com/controlbridge/mobile/ui/`. Do not put networking or controller logic inside the drawing code.
 
-- celular como controle;
-- conexão por rede local;
-- baixa latência;
-- descoberta simples;
-- interface de controle moderna;
-- sem APK Android instalado na Samsung TV;
-- sem AccessibilityService;
-- sem Bluetooth HID Device;
-- sem permissões de `BLUETOOTH_ADVERTISE`/`BLUETOOTH_CONNECT`/`BLUETOOTH_SCAN` no aplicativo.
+## Audio
 
-O próprio Luna demonstra o conceito de smartphone como controle para experiências voltadas à TV, inclusive com entrada de jogadores por QR code em experiências GameNight. citehttps://aws.amazon.com/pt/solutions/amazon/one-amazon-lane/streaming/
+The runtime has a centralized `UiSoundManager` with four semantic events: focus, click, open and close. It falls back to Android `ToneGenerator`, so the APK remains functional without shipping external audio files.
 
-## Interface
+Optional CC0 WAV assets can be installed automatically:
 
-O HUD foi redesenhado para parecer um produto de gaming: status da manete, endereço do receptor, área de controle virtual e animações simples, mantendo o foco em baixa latência.
+```bash
+bash scripts/fetch_ui_audio.sh
+```
 
-## Imagem solicitada
+The script uses the CC0 SFXMint UI set. If assets are present, the audio layer can be extended to prefer local files while retaining the tone fallback.
 
-A imagem enviada anteriormente por URL não pôde ser recuperada do servidor neste ambiente. Ela não foi falsamente incorporada ao projeto. Se a imagem for anexada diretamente à conversa, ela poderá ser usada como asset do HUD.
+## Performance rules
 
-## Limitações reais
+- Controller events are emitted only when an input changes meaningfully.
+- HID reports are compact and sent without JSON serialization.
+- LAN JSON packets are small and only emitted for key/motion changes.
+- UI animation uses a single custom Canvas instead of a large nested layout.
+- Network work runs off the main thread.
+- The HID/network bridge runs in a foreground `connectedDevice` service so the user can switch to another app without intentionally stopping the bridge.
 
-- O Android normalmente entrega eventos do controle ao app que está em primeiro plano; não prometemos captura global sem privilégios.
-- O receptor web recebe e visualiza os eventos, mas não pode injetá-los universalmente em jogos nativos da TV.
-- O telefone e a TV precisam estar na mesma rede local para a conexão direta.
-- O desempenho depende da rede; 5 GHz é recomendado quando disponível.
+## Important platform limitation
+
+The network receiver and the Bluetooth HID path solve different problems. WebSocket packets can drive the **ControlBridge TV app itself**, but an ordinary Android application cannot universally inject those packets as physical gamepad events into arbitrary third-party games. For external games/cloud clients, use the Bluetooth HID connection so the TV sees the phone as a real HID gamepad.
+
+## Status
+
+This is a structural 3.0 rewrite. The next validation step is physical: install both APKs, pair the phone and Android TV, verify that the TV sees **ControlBridge Gamepad**, then test a real game/cloud client. Build success alone is not considered feature completion.
