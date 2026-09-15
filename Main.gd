@@ -66,13 +66,13 @@ func _process(delta: float) -> void:
     message_timer = maxf(0.0, message_timer - delta)
     shake = maxf(0.0, shake - delta * 9.0)
 
-    var mp := get_viewport().get_mouse_position()
+    var mp: Vector2 = get_viewport().get_mouse_position()
     if mp.x > 0 and mp.y > 0:
         mouse_pos = mp
 
     # Auto convert ore -> bars
     if ore >= ore_to_bar_ratio:
-        var convert := floorf(ore / ore_to_bar_ratio)
+        var convert: float = floorf(ore / ore_to_bar_ratio)
         ore -= convert * ore_to_bar_ratio
         bars += convert
 
@@ -173,7 +173,7 @@ func _update_pickaxes(delta: float) -> void:
         p["angle"] += p["spin"] * delta
 
         var target_pos: Vector2 = p["target"]["pos"] if p["target"] is Dictionary else mouse_pos
-        var dir := (target_pos - p["pos"]).normalized()
+        var dir: Vector2 = (target_pos - p["pos"]).normalized()
         p["pos"] += dir * p["speed"] * delta
 
         if p["pos"].distance_to(target_pos) < 18.0:
@@ -199,7 +199,7 @@ func _damage_rock(rock: Dictionary, dmg: float) -> void:
         _break_rock(rock)
 
 func _break_rock(rock: Dictionary) -> void:
-    var gained_ore := rock["ore"] * (1.0 + value_level * 0.25)
+    var gained_ore: float = rock["ore"] * (1.0 + value_level * 0.25)
     ore += gained_ore
     xp += gained_ore * 2.8
 
@@ -265,12 +265,18 @@ func _unhandled_input(event: InputEvent) -> void:
     if event is InputEventMouseMotion:
         hover_button = _button_at(event.position)
     elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-        var b := _button_at(event.position)
-        match b:
-            0: _buy_power()
-            1: _buy_area()
-            2: _buy_speed()
-            3: _buy_value()
+        _handle_pointer_press(event.position)
+    elif event is InputEventScreenTouch and event.pressed:
+        _handle_pointer_press(event.position)
+
+func _handle_pointer_press(p: Vector2) -> void:
+    mouse_pos = p
+    var b := _button_at(p)
+    match b:
+        0: _buy_power()
+        1: _buy_area()
+        2: _buy_speed()
+        3: _buy_value()
 
 func _button_at(p: Vector2) -> int:
     if Rect2(40, 600, 220, 72).has_point(p): return 0
@@ -352,10 +358,10 @@ func _draw() -> void:
         var flash: float = rock["hit_flash"]
 
         draw_circle(pos, r + 8.0, Color(rock["color"].r, rock["color"].g, rock["color"].b, 0.08 + flash * 0.12))
-        var body_col := rock["color"].lightened(flash * 0.35)
+        var body_col: Color = rock["color"].lightened(flash * 0.35)
         draw_circle(pos, r, body_col)
         draw_circle(pos, r * 0.72, body_col.darkened(0.25))
-        var hp_ratio := clampf(rock["hp"] / rock["max_hp"], 0.0, 1.0)
+        var hp_ratio: float = clampf(rock["hp"] / rock["max_hp"], 0.0, 1.0)
         draw_rect(Rect2(pos.x - 18, pos.y + r + 6, 36, 4), Color("#1a2a31"))
         draw_rect(Rect2(pos.x - 18, pos.y + r + 6, 36 * hp_ratio, 4), Color("#c48b43"))
 
@@ -398,7 +404,7 @@ func _draw() -> void:
     if message_timer > 0.0:
         draw_string(ThemeDB.fallback_font, Vector2(40, 690), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color("#e6c36a"))
 
-    draw_string(ThemeDB.fallback_font, Vector2(1000, 690), "Passe o mouse nas rochas", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("#4d676f"))
+    draw_string(ThemeDB.fallback_font, Vector2(1000, 690), "Toque nas rochas para minerar", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("#4d676f"))
 
 func _draw_upgrade_card(pos: Vector2, title: String, lvl: int, desc: String) -> void:
     draw_style_box(_make_box(Color("#0a1419"), Color("#1c323c")), Rect2(pos.x, pos.y, 240, 78))
