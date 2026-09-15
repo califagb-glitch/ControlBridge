@@ -164,12 +164,10 @@ class MainActivity : Activity() {
             p.color = Color.rgb(7, 9, 14)
             c.drawRect(0f, 0f, w, h, p)
 
-            // Soft animated accent glow.
             val pulse = (SystemClock.uptimeMillis() % 1800L) / 1800f
             p.color = Color.argb((18 + 10 * pulse).toInt(), 90, 120, 255)
             c.drawCircle(w * 0.82f, 54f, 90f + pulse * 20f, p)
 
-            // Header
             p.typeface = android.graphics.Typeface.DEFAULT_BOLD
             p.color = Color.WHITE
             p.textSize = if (compact) 22f else 26f
@@ -180,13 +178,12 @@ class MainActivity : Activity() {
             c.drawText("PHONE CONTROLLER  •  LOCAL NETWORK", pad, 58f, p)
 
             val statusColor = if (connected) Color.rgb(91, 231, 160) else Color.rgb(255, 181, 89)
-            p.color = Color.argb(38, statusColor.red(), statusColor.green(), statusColor.blue())
+            p.color = Color.argb(38, Color.red(statusColor), Color.green(statusColor), Color.blue(statusColor))
             c.drawRoundRect(w - 150f, 18f, w - pad, 48f, 15f, 15f, p)
             p.color = statusColor
             p.textSize = 10f
             c.drawText(if (connected) "●  CONECTADO" else "●  AGUARDANDO", w - 138f, 37f, p)
 
-            // Connection card
             p.color = Color.rgb(15, 20, 30)
             c.drawRoundRect(pad, 78f, w - pad, 145f, 20f, 20f, p)
             p.color = Color.rgb(30, 38, 54)
@@ -200,7 +197,6 @@ class MainActivity : Activity() {
             p.textSize = 9f
             c.drawText(bridge.url(), pad + 55f, 124f, p)
 
-            // Controller surface
             val top = 164f
             p.color = Color.rgb(11, 15, 23)
             c.drawRoundRect(pad, top, w - pad, h - 18f, 26f, 26f, p)
@@ -213,17 +209,14 @@ class MainActivity : Activity() {
             drawStick(c, leftX, centerY, lx, ly)
             drawStick(c, rightX, centerY, rx, ry)
 
-            // Face buttons
             val base = minOf(w * 0.75f, w - 70f)
             drawFaceButton(c, base, centerY - 55f, 52f, KeyEvent.KEYCODE_BUTTON_Y, "Y", Color.rgb(255, 205, 92))
             drawFaceButton(c, base + 58f, centerY, 52f, KeyEvent.KEYCODE_BUTTON_B, "B", Color.rgb(255, 103, 117))
             drawFaceButton(c, base - 58f, centerY, 52f, KeyEvent.KEYCODE_BUTTON_X, "X", Color.rgb(100, 170, 255))
             drawFaceButton(c, base, centerY + 55f, 52f, KeyEvent.KEYCODE_BUTTON_A, "A", Color.rgb(103, 230, 160))
 
-            // D-pad
             drawDpad(c, w * 0.14f, centerY)
 
-            // Triggers / live telemetry
             p.color = Color.rgb(116, 130, 154)
             p.textSize = 8f
             c.drawText("L2", pad + 18f, top + 24f, p)
@@ -235,7 +228,6 @@ class MainActivity : Activity() {
             p.textSize = 9f
             c.drawText("TOQUE NOS BOTÕES • MOVA OS STICKS", w / 2f - 105f, top + 48f, p)
 
-            // Input activity indicator.
             val age = SystemClock.elapsedRealtime() - lastInputAt
             p.color = if (age < 500) Color.rgb(92, 226, 160) else Color.rgb(79, 91, 112)
             c.drawCircle(w / 2f, h - 29f, 4f, p)
