@@ -2,6 +2,8 @@
 
 ControlBridge is a local controller bridge designed around one goal: **physical gamepad → Android phone → TV**. The phone is the bridge, not a gamepad tester.
 
+> 3.0 note: this branch is a deep architectural rewrite; validate the generated APKs on the target phone/TV before treating the bridge as production-ready.
+
 ## Architecture
 
 ```text
@@ -16,7 +18,7 @@ Bluetooth gamepad
                                       └─ receiver UI / remote events
 ```
 
-The Bluetooth HID path is the path intended for games and cloud-gaming apps that accept a normal Bluetooth gamepad. Android's public `BluetoothHidDevice` API supports registering an HID application, connecting to a paired host and sending HID reports. The registration must remain foreground, so the project now keeps the bridge in a `connectedDevice` foreground service. 
+The Bluetooth HID path is the path intended for games and cloud-gaming apps that accept a normal Bluetooth gamepad. Android's public `BluetoothHidDevice` API supports registering an HID application, connecting to a paired host and sending HID reports. The registration must remain foreground, so the project now keeps the bridge in a `connectedDevice` foreground service.
 
 The WebSocket path is a low-latency LAN control channel for the companion TV receiver. A normal Android app cannot inject arbitrary input into unrelated third-party TV applications just because it receives WebSocket packets; therefore the TV receiver intentionally exposes and visualizes the remote stream instead of pretending it can control every external app.
 
