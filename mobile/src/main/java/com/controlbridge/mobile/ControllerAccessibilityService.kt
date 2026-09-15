@@ -6,18 +6,11 @@ import android.os.Build
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
-import java.net.DatagramPacket
-import java.net.DatagramSocket
-import java.net.InetAddress
-import java.util.Locale
 
+/** Captures the physical controller globally and forwards it to the phone's HID device. */
 class ControllerAccessibilityService : AccessibilityService() {
-    private var socket: DatagramSocket? = null
-    private var tvIp: String = ""
-
     override fun onServiceConnected() {
         super.onServiceConnected()
-        tvIp = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_TV_IP, "") ?: ""
         val info = serviceInfo ?: AccessibilityServiceInfo()
         info.flags = info.flags or AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
         if (Build.VERSION.SDK_INT >= 34) {
@@ -30,7 +23,7 @@ class ControllerAccessibilityService : AccessibilityService() {
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
         if (!isControllerEvent(event)) return false
-        send("KEY|${event.action}|${event.keyCode}|${event.repeatCount}|${event.deviceId}")
+        HidGamepadServiceHolder.service?.sendKey(event)
         return false
     }
 
@@ -38,15 +31,9 @@ class ControllerAccessibilityService : AccessibilityService() {
         if (Build.VERSION.SDK_INT < 34) return
         val source = event.source
         if ((source and InputDevice.SOURCE_JOYSTICK) != 0 || (source and InputDevice.SOURCE_GAMEPAD) != 0) {
-            val payload = String.format(Locale.US, "JOY|%.3f|%.3f|%.3f|%.3f|%.3f|%.3f|%d",
-                axis(event, MotionEvent.AXIS_X), axis(event, MotionEvent.AXIS_Y),
-                axis(event, MotionEvent.AXIS_Z), axis(event, MotionEvent.AXIS_RZ),
-                axis(event, MotionEvent.AXIS_LTRIGGER), axis(event, MotionEvent.AXIS_RTRIGGER), event.deviceId)
-            send(payload)
+            HidGamepadServiceHolder.service?.sendMotion(event)
         }
     }
-
-    private fun axis(event: MotionEvent, axis: Int): Float = try { event.getAxisValue(axis) } catch (_: Exception) { 0f }
 
     private fun isControllerEvent(event: KeyEvent): Boolean {
         val source = event.source
@@ -56,27 +43,11 @@ class ControllerAccessibilityService : AccessibilityService() {
             event.device?.name?.contains("gamepad", true) == true
     }
 
-    private fun send(message: String) {
-        if (tvIp.isBlank()) return
-        Thread {
-            try {
-                if (socket == null || socket?.isClosed == true) socket = DatagramSocket()
-                val data = message.toByteArray(Charsets.UTF_8)
-                socket?.send(DatagramPacket(data, data.size, InetAddress.getByName(tvIp), PORT))
-            } catch (_: Exception) { }
-        }.start()
-    }
-
     override fun onInterrupt() = Unit
+}
 
-    override fun onDestroy() {
-        socket?.close()
-        super.onDestroy()
-    }
-
-    companion object {
-        const val PORT = 47600
-        const val PREFS = "controlbridge"
-        const val KEY_TV_IP = "tv_ip"
-    }
+/** Process-local bridge between the accessibility input capture and HID service. */
+object HidGamepadServiceHolder {
+    @Volatile
+    var service: HidGamepadService? = null
 }
