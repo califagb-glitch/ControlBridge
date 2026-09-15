@@ -77,6 +77,7 @@ class HidGamepadService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        HidGamepadServiceHolder.service = this
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification("Inicializando Bluetooth HID…"))
         val adapter = BluetoothAdapter.getDefaultAdapter()
@@ -274,6 +275,7 @@ class HidGamepadService : Service() {
     }
 
     override fun onDestroy() {
+        HidGamepadServiceHolder.service = null
         try { hid?.unregisterApp() } catch (_: Exception) { }
         hid?.let { try { BluetoothAdapter.getDefaultAdapter()?.closeProfileProxy(BluetoothProfile.HID_DEVICE, it) } catch (_: Exception) {} }
         hid = null
