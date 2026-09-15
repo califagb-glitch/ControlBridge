@@ -25,6 +25,7 @@ jobs:
           archive_output: true
           cache: true
           verbose: true
+          export_debug: true
           presets_to_export: Windows Desktop,Android
       - name: Upload builds
         uses: actions/upload-artifact@v4
